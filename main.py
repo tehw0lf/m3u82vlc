@@ -71,6 +71,8 @@ def main(stdscr):
 
     while True:
         raw_input = ""
+        if env.favorites and len(env.favorites) > 0:
+            history.extend(env.favorites)
         history_index = len(history)
         prompt = "Enter the stream you want to watch or record: "
         stdscr.addstr("\n" + prompt)
