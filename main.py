@@ -1,11 +1,11 @@
 import curses
-import subprocess
 import os
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
+import subprocess
 import time
-import env
+import undetected_chromedriver as uc
 from threading import Timer, Event
+
+import env
 
 
 def process_input(input_string):
@@ -141,11 +141,12 @@ def main(stdscr):
 
             printed_urls = set()
             m3u8_url_to_play = None
-            options = webdriver.ChromeOptions()
+            options = uc.ChromeOptions()
             options.add_argument("--proxy-server=http://127.0.0.1:8080")
-            service = Service(env.chromedriver_path)
 
-            driver = webdriver.Chrome(service=service, options=options)
+            driver = uc.Chrome(
+                headless=True, use_subprocess=False, options=options
+            )
             driver.get(video_url)
             time.sleep(1)
 
