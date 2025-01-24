@@ -148,14 +148,13 @@ def main(stdscr):
                 headless=True, use_subprocess=False, options=options
             )
             driver.get(video_url)
-            time.sleep(1)
 
             m3u8_detected = Event()
 
             def timeout_handler():
                 if not m3u8_detected.is_set():
                     stdscr.addstr(
-                        "\nNo .m3u8 URL detected within 10 seconds. Restarting...\n"
+                        "\nNo .m3u8 URL detected within 5 seconds. Restarting...\n"
                     )
                     stdscr.refresh()
                     mitmproxy_process.terminate()
@@ -167,7 +166,7 @@ def main(stdscr):
                         stdscr.refresh()
                     return
 
-            timeout_timer = Timer(10, timeout_handler)
+            timeout_timer = Timer(5, timeout_handler)
             timeout_timer.start()
 
             for line in mitmproxy_process.stdout:
