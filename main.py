@@ -7,6 +7,21 @@ from threading import Timer, Event
 
 import env
 
+timer = None
+
+
+def print_dot(stdscr):
+    global timer
+    curse_print(stdscr, ".")
+    timer = Timer(1, lambda: print_dot(stdscr))
+    timer.start()
+
+
+def stop_dots():
+    global timer
+    if timer:
+        timer.cancel()
+
 
 def process_input(input_string):
     """
@@ -61,6 +76,14 @@ def record_stream(m3u8_url, output_file):
     )
 
 
+def curse_print(stdscr, input):
+    try:
+        stdscr.addstr(input)
+        stdscr.refresh()
+    except curses.error:
+        pass
+
+
 def main(stdscr):
     curses.cbreak()
     curses.noecho()
@@ -75,7 +98,7 @@ def main(stdscr):
             history.extend(env.favorites)
         history_index = len(history)
         prompt = "Enter the stream you want to watch or record: "
-        stdscr.addstr("\n" + prompt)
+        curse_print(stdscr, "\n" + prompt)
         stdscr.refresh()
 
         while True:
@@ -89,7 +112,7 @@ def main(stdscr):
                     continue
                 stdscr.move(stdscr.getyx()[0], len(prompt))
                 stdscr.clrtoeol()
-                stdscr.addstr(raw_input)
+                curse_print(stdscr, raw_input)
                 stdscr.refresh()
 
             elif key == curses.KEY_DOWN:
@@ -101,7 +124,7 @@ def main(stdscr):
                     raw_input = ""
                 stdscr.move(stdscr.getyx()[0], len(prompt))
                 stdscr.clrtoeol()
-                stdscr.addstr(raw_input)
+                curse_print(stdscr, raw_input)
                 stdscr.refresh()
 
             elif key in [10, 13]:
@@ -112,14 +135,14 @@ def main(stdscr):
                     raw_input = raw_input[:-1]
                     stdscr.move(stdscr.getyx()[0], len(prompt))
                     stdscr.clrtoeol()
-                    stdscr.addstr(raw_input)
+                    curse_print(stdscr, raw_input)
                     stdscr.refresh()
 
             else:
                 raw_input += chr(key)
                 stdscr.move(stdscr.getyx()[0], len(prompt))
                 stdscr.clrtoeol()
-                stdscr.addstr(raw_input)
+                curse_print(stdscr, raw_input)
                 stdscr.refresh()
 
         raw_input = raw_input.strip()
@@ -147,14 +170,17 @@ def main(stdscr):
             driver = uc.Chrome(
                 headless=True, use_subprocess=False, options=options
             )
+            print_dot(stdscr)
             driver.get(video_url)
 
             m3u8_detected = Event()
 
             def timeout_handler():
                 if not m3u8_detected.is_set():
-                    stdscr.addstr(
-                        "\nNo .m3u8 URL detected within 5 seconds. Restarting...\n"
+                    stop_dots()
+                    curse_print(
+                        stdscr,
+                        "\nNo .m3u8 URL detected within 5 seconds. Restarting...\n",
                     )
                     stdscr.refresh()
                     mitmproxy_process.terminate()
@@ -162,8 +188,9 @@ def main(stdscr):
                     try:
                         driver.quit()
                     except Exception as e:
-                        stdscr.addstr(f"Error while quitting driver: {e}\n")
-                        stdscr.refresh()
+                        curse_print(
+                            stdscr, f"Error while quitting driver: {e}\n"
+                        )
                     return
 
             timeout_timer = Timer(5, timeout_handler)
@@ -171,6 +198,7 @@ def main(stdscr):
 
             for line in mitmproxy_process.stdout:
                 if ".m3u8" in line:
+                    stop_dots()
                     timeout_timer.cancel()
                     m3u8_detected.set()
                     m3u8_url = line.strip()
@@ -181,7 +209,7 @@ def main(stdscr):
                         printed_urls.add(m3u8_url)
 
         except Exception as e:
-            stdscr.addstr(f"Error occurred: {e}\n")
+            curse_print(stdscr, f"Error occurred: {e}\n")
             stdscr.refresh()
             mitmproxy_process.terminate()
             mitmproxy_process.wait()
@@ -192,7 +220,7 @@ def main(stdscr):
                 try:
                     driver.quit()
                 except Exception as e:
-                    stdscr.addstr(f"Error while quitting driver: {e}\n")
+                    curse_print(stdscr, f"Error while quitting driver: {e}\n")
                     stdscr.refresh()
             mitmproxy_process.terminate()
             mitmproxy_process.wait()
@@ -204,8 +232,9 @@ def main(stdscr):
                 stderr=subprocess.DEVNULL,
             )
 
-            stdscr.addstr(
-                "\nPress RETURN to start recording or TAB to switch streams: "
+            curse_print(
+                stdscr,
+                "\nPress RETURN to start recording or TAB to switch streams: ",
             )
             stdscr.refresh()
 
@@ -213,17 +242,17 @@ def main(stdscr):
                 key = stdscr.getch()
 
                 if key == curses.KEY_ENTER or key in [10, 13]:
-                    stdscr.addstr("\nStarting recording...\n")
+                    curse_print(stdscr, "\nStarting recording...\n")
                     stdscr.refresh()
                     vlc_process.terminate()
                     vlc_process.wait()
 
                     record_stream(m3u8_url_to_play, output_file)
-                    stdscr.addstr("\nRecording and playback started.\n")
+                    curse_print(stdscr, "\nRecording and playback started.\n")
                     break
 
                 elif key == 9:
-                    stdscr.addstr("\nRestarting for a new stream...\n")
+                    curse_print(stdscr, "\nRestarting for a new stream...\n")
                     stdscr.refresh()
                     vlc_process.terminate()
                     vlc_process.wait()
