@@ -11,9 +11,9 @@ import env
 timer = None
 
 
-def quit_curses() -> None:
-    curses.echo()
+def quit_curses(stdscr: curses.window) -> None:
     curses.nocbreak()
+    stdscr.refresh()
     curses.endwin()
 
 
@@ -111,7 +111,6 @@ def curse_print(stdscr: curses.window, input: str) -> None:
 
 def main(stdscr: curses.window) -> None:
     curses.cbreak()
-    curses.noecho()
     stdscr.keypad(True)
 
     history = []
@@ -207,7 +206,7 @@ def main(stdscr: curses.window) -> None:
                             "\nNo .m3u8 URL detected within 5 seconds. Restarting...\n",
                         )
                         quit_mitmproxy(mitmproxy_process)
-                        quit_chromedriver(driver)
+                        quit_chromedriver(driver, stdscr)
                         return
 
                 timeout_timer = Timer(5, timeout_handler)
@@ -232,7 +231,7 @@ def main(stdscr: curses.window) -> None:
 
             finally:
                 if "driver" in locals():
-                    quit_chromedriver(driver)
+                    quit_chromedriver(driver, stdscr)
                 quit_mitmproxy(mitmproxy_process)
 
             if m3u8_url_to_play:
@@ -267,14 +266,16 @@ def main(stdscr: curses.window) -> None:
                         break
 
     except KeyboardInterrupt:
-        quit_curses()
-        raise SystemExit
+        stop_dots()
+        quit_curses(stdscr)
+        exit()
     finally:
         try:
             time.sleep(0.01)
         except KeyboardInterrupt:
-            quit_curses()
-            raise SystemExit
+            stop_dots()
+            quit_curses(stdscr)
+            exit()
         finally:
             pass
 
