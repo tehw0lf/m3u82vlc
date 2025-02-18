@@ -2,39 +2,40 @@ import curses
 import os
 import subprocess
 import time
+from threading import Event, Timer
+
 import undetected_chromedriver as uc
-from threading import Timer, Event
 
 import env
 
 timer = None
 
 
-def print_dot(stdscr):
+def print_dot(stdscr: curses.window) -> None:
     global timer
     curse_print(stdscr, ".")
     timer = Timer(1, lambda: print_dot(stdscr))
     timer.start()
 
 
-def stop_dots():
+def stop_dots() -> None:
     global timer
     if timer:
         timer.cancel()
 
 
-def process_input(input_string):
+def process_input(input: str) -> str:
     """
     Strips a stream name from a url
     """
-    if "/" in input_string:
-        stream_name = input_string.split("/")[-1]
+    if "/" in input:
+        stream_name = input.split("/")[-1]
     else:
-        stream_name = input_string
+        stream_name = input
     return stream_name
 
 
-def get_unique_file_name(base_name):
+def get_unique_file_name(base_name: str) -> str:
     """
     Return a unique file name based on a stream name, by incrementing a counter.
     """
@@ -50,7 +51,7 @@ def get_unique_file_name(base_name):
         counter += 1
 
 
-def record_stream(m3u8_url, output_file):
+def record_stream(m3u8_url: str, output_file: str) -> None:
     """
     Starts the recording and playback processes detached from the main program.
     """
@@ -76,7 +77,7 @@ def record_stream(m3u8_url, output_file):
     )
 
 
-def curse_print(stdscr, input):
+def curse_print(stdscr: curses.window, input: str) -> None:
     try:
         stdscr.addstr(input)
         stdscr.refresh()
@@ -84,7 +85,7 @@ def curse_print(stdscr, input):
         pass
 
 
-def main(stdscr):
+def main(stdscr: curses.window) -> None:
     curses.cbreak()
     curses.noecho()
     stdscr.keypad(True)
