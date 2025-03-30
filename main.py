@@ -80,6 +80,7 @@ def record_stream(m3u8_url: str, output_file: str) -> None:
     """
     subprocess.Popen(
         [
+            "nohup",
             "vlc",
             m3u8_url,
             "--sout",
@@ -93,7 +94,11 @@ def record_stream(m3u8_url: str, output_file: str) -> None:
     )
     time.sleep(1)
     subprocess.Popen(
-        ["vlc", output_file],
+        [
+            "nohup",
+            "vlc",
+            output_file,
+        ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         preexec_fn=os.setsid,
