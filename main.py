@@ -12,9 +12,8 @@ timer = None
 
 
 def quit_curses(stdscr: curses.window) -> None:
-    curses.nocbreak()
-    stdscr.refresh()
     curses.endwin()
+    stdscr.refresh()
 
 
 def quit_chromedriver(driver: uc.Chrome, stdscr: curses.window) -> None:
@@ -110,7 +109,6 @@ def curse_print(stdscr: curses.window, input: str) -> None:
 
 
 def main(stdscr: curses.window) -> None:
-    curses.cbreak()
     stdscr.keypad(True)
 
     history = []
@@ -268,14 +266,12 @@ def main(stdscr: curses.window) -> None:
     except KeyboardInterrupt:
         stop_dots()
         quit_curses(stdscr)
-        exit()
     finally:
         try:
             time.sleep(0.01)
         except KeyboardInterrupt:
             stop_dots()
             quit_curses(stdscr)
-            exit()
         finally:
             pass
 
