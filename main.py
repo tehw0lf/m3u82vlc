@@ -223,6 +223,8 @@ def main(stdscr: curses.window) -> None:
                         m3u8_url = line.strip()
                         if m3u8_url in printed_urls:
                             m3u8_url_to_play = m3u8_url
+                            if env.log_file:
+                                os.remove(env.log_file)
                             break
                         else:
                             printed_urls.add(m3u8_url)
