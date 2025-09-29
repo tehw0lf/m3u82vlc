@@ -51,6 +51,8 @@ def process_input(input: str) -> str:
     """
     Strips a stream name from a url
     """
+    while input.endswith("/"):
+        input = input[:-1]
     if "/" in input:
         stream_name = input.split("/")[-1]
     else:
