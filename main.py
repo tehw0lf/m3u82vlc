@@ -124,7 +124,7 @@ def main(stdscr: curses.window) -> None:
             if env.favorites and len(env.favorites) > 0:
                 history.extend(env.favorites)
             history_index = len(history)
-            prompt = "Enter the stream you want to watch or record: "
+            prompt = "Enter the stream URL you want to watch or record: "
             curse_print(stdscr, "\n" + prompt)
 
             while True:
