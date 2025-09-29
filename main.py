@@ -167,12 +167,11 @@ def main(stdscr: curses.window) -> None:
                     stdscr.clrtoeol()
                     curse_print(stdscr, raw_input)
 
-            raw_input = raw_input.strip()
+            video_url = raw_input.strip()
             if raw_input:
                 history.append(raw_input)
 
-            stream_name = process_input(raw_input)
-            video_url = f"{env.base_url}/{stream_name}"
+            stream_name = process_input(video_url)
             output_file = get_unique_file_name(f"{stream_name}.mp4")
 
             try:
@@ -206,13 +205,13 @@ def main(stdscr: curses.window) -> None:
                         stop_dots()
                         curse_print(
                             stdscr,
-                            "\nNo .m3u8 URL detected within 5 seconds. Restarting...\n",
+                            "\nNo .m3u8 URL detected within 10 seconds. Restarting...\n",
                         )
                         quit_mitmproxy(mitmproxy_process)
                         quit_chromedriver(driver, stdscr)
                         return
 
-                timeout_timer = Timer(5, timeout_handler)
+                timeout_timer = Timer(10, timeout_handler)
                 timeout_timer.start()
 
                 for line in mitmproxy_process.stdout:
