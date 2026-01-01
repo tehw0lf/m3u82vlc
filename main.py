@@ -170,6 +170,8 @@ def main(stdscr: curses.window) -> None:
                     curse_print(stdscr, raw_input)
 
             video_url = raw_input.strip()
+            if not video_url:
+                continue
             if raw_input:
                 history.append(raw_input)
 
