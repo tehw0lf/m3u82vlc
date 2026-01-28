@@ -5,6 +5,7 @@ import time
 from threading import Event, Timer
 
 import undetected_chromedriver as uc
+from selenium.webdriver.common.by import By
 
 import env
 
@@ -194,14 +195,28 @@ def main(stdscr: curses.window) -> None:
                 printed_urls = set()
                 m3u8_url_to_play = None
                 options = uc.ChromeOptions()
+                options.add_argument("--window-size=1920x1080")
                 options.add_argument("--proxy-server=http://127.0.0.1:8080")
+                options.add_argument("--user-data-dir=local-chromium-profile")
+                use_headless_mode = True
+                for condition in env.non_headless_mode_conditions:
+                    if condition in video_url:
+                        use_headless_mode = False
+                        break
 
                 driver = uc.Chrome(
-                    headless=True, use_subprocess=False, options=options
+                    headless=use_headless_mode,
+                    use_subprocess=False,
+                    options=options,
                 )
                 print_dot(stdscr)
                 driver.get(video_url)
 
+                try:
+                    for element in env.elements_to_click_on_load:
+                        driver.find_element(By.ID, element).click()
+                except Exception:
+                    pass
                 m3u8_detected = Event()
 
                 def timeout_handler():
@@ -209,13 +224,13 @@ def main(stdscr: curses.window) -> None:
                         stop_dots()
                         curse_print(
                             stdscr,
-                            "\nNo .m3u8 URL detected within 10 seconds. Restarting...\n",
+                            "\nNo .m3u8 URL detected within 20 seconds. Restarting...\n",
                         )
                         quit_mitmproxy(mitmproxy_process)
                         quit_chromedriver(driver, stdscr)
                         return
 
-                timeout_timer = Timer(10, timeout_handler)
+                timeout_timer = Timer(20, timeout_handler)
                 timeout_timer.start()
 
                 for line in mitmproxy_process.stdout:
@@ -226,8 +241,8 @@ def main(stdscr: curses.window) -> None:
                         m3u8_url = line.strip()
                         if m3u8_url in printed_urls:
                             m3u8_url_to_play = m3u8_url
-                            if env.log_file:
-                                os.remove(env.log_file)
+                            if env.proxy_log_file:
+                                os.remove(env.proxy_log_file)
                             break
                         else:
                             printed_urls.add(m3u8_url)

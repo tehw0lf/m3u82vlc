@@ -12,6 +12,6 @@ def request(flow: http.HTTPFlow) -> None:
         json_data = json.loads(flow.response.content).get("url")
         if json_data and json_data.endswith(".m3u8"):
             print(json_data)
-    if env.log_file:
-        with open(env.log_file, "a") as log:
+    if env.proxy_log_file:
+        with open(env.proxy_log_file, "a") as log:
             log.write(flow.request.pretty_url + "\n")
