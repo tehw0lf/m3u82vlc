@@ -218,19 +218,20 @@ def main(stdscr: curses.window) -> None:
                 except Exception:
                     pass
                 m3u8_detected = Event()
+                timer_duration = 10 if use_headless_mode else 600
 
                 def timeout_handler():
                     if not m3u8_detected.is_set():
                         stop_dots()
                         curse_print(
                             stdscr,
-                            "\nNo .m3u8 URL detected within 20 seconds. Restarting...\n",
+                            f"\nNo .m3u8 URL detected within {timer_duration} seconds. Restarting...\n",
                         )
                         quit_mitmproxy(mitmproxy_process)
                         quit_chromedriver(driver, stdscr)
                         return
 
-                timeout_timer = Timer(20, timeout_handler)
+                timeout_timer = Timer(timer_duration, timeout_handler)
                 timeout_timer.start()
 
                 for line in mitmproxy_process.stdout:
