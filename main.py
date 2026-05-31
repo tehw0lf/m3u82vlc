@@ -234,7 +234,7 @@ def main(stdscr: curses.window) -> None:
                 timeout_timer = Timer(timer_duration, timeout_handler)
                 timeout_timer.start()
 
-                page.goto(video_url)
+                page.goto(video_url, timeout=30000, wait_until="domcontentloaded")
 
                 try:
                     for element in env.elements_to_click_on_load:
