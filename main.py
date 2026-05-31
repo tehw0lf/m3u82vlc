@@ -4,8 +4,7 @@ import subprocess
 import time
 from threading import Event, Timer
 
-import undetected_chromedriver as uc
-from selenium.webdriver.common.by import By
+from cloakbrowser import launch_context
 
 import env
 
@@ -17,17 +16,12 @@ def quit_curses(stdscr: curses.window) -> None:
     stdscr.refresh()
 
 
-def quit_chromedriver(driver: uc.Chrome, stdscr: curses.window) -> None:
+def quit_browser(context, stdscr: curses.window) -> None:
     try:
-        driver.quit()
+        context.close()
     except Exception as e:
-        curse_print(stdscr, f"Error while quitting driver: {e}\n")
+        curse_print(stdscr, f"Error while quitting browser: {e}\n")
         stdscr.refresh()
-
-
-def quit_mitmproxy(mitmproxy_process: subprocess.Popen[str]) -> None:
-    mitmproxy_process.terminate()
-    mitmproxy_process.wait()
 
 
 def quit_vlc(vlc_process: subprocess.Popen[str]):
@@ -179,46 +173,54 @@ def main(stdscr: curses.window) -> None:
             stream_name = process_input(video_url)
             output_file = get_unique_file_name(f"{stream_name}.mp4")
 
+            context = None
             try:
-                mitmproxy_command = [
-                    "mitmdump",
-                    "-s",
-                    "capture_video_requests.py",
-                ]
-                mitmproxy_process = subprocess.Popen(
-                    mitmproxy_command,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                )
-
-                printed_urls = set()
-                m3u8_url_to_play = None
-                options = uc.ChromeOptions()
-                options.add_argument("--window-size=1920x1080")
-                options.add_argument("--proxy-server=http://127.0.0.1:8080")
-                options.add_argument("--user-data-dir=local-chromium-profile")
-                use_headless_mode = True
+                use_headless = True
                 for condition in env.non_headless_mode_conditions:
                     if condition in video_url:
-                        use_headless_mode = False
+                        use_headless = False
                         break
 
-                driver = uc.Chrome(
-                    headless=use_headless_mode,
-                    use_subprocess=False,
-                    options=options,
-                )
-                print_dot(stdscr)
-                driver.get(video_url)
-
-                try:
-                    for element in env.elements_to_click_on_load:
-                        driver.find_element(By.ID, element).click()
-                except Exception:
-                    pass
+                printed_urls: set[str] = set()
+                m3u8_url_to_play = None
                 m3u8_detected = Event()
-                timer_duration = 10 if use_headless_mode else 600
+                timer_duration = 10 if use_headless else 600
+
+                context = launch_context(
+                    headless=use_headless,
+                    viewport={"width": 1920, "height": 1080},
+                )
+                page = context.new_page()
+
+                def on_request(request) -> None:
+                    nonlocal m3u8_url_to_play
+                    url = request.url
+                    if ".m3u8" in url:
+                        if url in printed_urls:
+                            m3u8_url_to_play = url
+                            m3u8_detected.set()
+                        else:
+                            printed_urls.add(url)
+
+                def on_response(response) -> None:
+                    nonlocal m3u8_url_to_play
+                    try:
+                        body = response.json()
+                        if isinstance(body, dict):
+                            url = body.get("url", "")
+                            if url and url.endswith(".m3u8"):
+                                if url in printed_urls:
+                                    m3u8_url_to_play = url
+                                    m3u8_detected.set()
+                                else:
+                                    printed_urls.add(url)
+                    except Exception:
+                        pass
+
+                page.on("request", on_request)
+                page.on("response", on_response)
+
+                print_dot(stdscr)
 
                 def timeout_handler():
                     if not m3u8_detected.is_set():
@@ -227,36 +229,30 @@ def main(stdscr: curses.window) -> None:
                             stdscr,
                             f"\nNo .m3u8 URL detected within {timer_duration} seconds. Restarting...\n",
                         )
-                        quit_mitmproxy(mitmproxy_process)
-                        quit_chromedriver(driver, stdscr)
-                        return
+                        m3u8_detected.set()
 
                 timeout_timer = Timer(timer_duration, timeout_handler)
                 timeout_timer.start()
 
-                for line in mitmproxy_process.stdout:
-                    if ".m3u8" in line:
-                        stop_dots()
-                        timeout_timer.cancel()
-                        m3u8_detected.set()
-                        m3u8_url = line.strip()
-                        if m3u8_url in printed_urls:
-                            m3u8_url_to_play = m3u8_url
-                            if env.proxy_log_file:
-                                os.remove(env.proxy_log_file)
-                            break
-                        else:
-                            printed_urls.add(m3u8_url)
+                page.goto(video_url, timeout=30000, wait_until="domcontentloaded")
+
+                try:
+                    for element in env.elements_to_click_on_load:
+                        page.locator(f"#{element}").click(timeout=3000)
+                except Exception:
+                    pass
+
+                m3u8_detected.wait()
+                stop_dots()
+                timeout_timer.cancel()
 
             except Exception as e:
                 curse_print(stdscr, f"Error occurred: {e}\n")
-                quit_mitmproxy(mitmproxy_process)
                 raise e
 
             finally:
-                if "driver" in locals():
-                    quit_chromedriver(driver, stdscr)
-                quit_mitmproxy(mitmproxy_process)
+                if context is not None:
+                    quit_browser(context, stdscr)
 
             if m3u8_url_to_play:
                 vlc_process = subprocess.Popen(

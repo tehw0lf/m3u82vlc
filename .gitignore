@@ -11,4 +11,4 @@ wheels/
 
 # Local environments
 env.py
-local-chromium-profile/
+browser-profile/
