@@ -208,7 +208,7 @@ def main(stdscr: curses.window) -> None:
                         body = response.json()
                         if isinstance(body, dict):
                             url = body.get("url", "")
-                            if url and url.endswith(".m3u8"):
+                            if url and ".m3u8" in url:
                                 if url in printed_urls:
                                     m3u8_url_to_play = url
                                     m3u8_detected.set()
@@ -234,7 +234,9 @@ def main(stdscr: curses.window) -> None:
                 timeout_timer = Timer(timer_duration, timeout_handler)
                 timeout_timer.start()
 
-                page.goto(video_url, timeout=30000, wait_until="domcontentloaded")
+                page.goto(
+                    video_url, timeout=30000, wait_until="domcontentloaded"
+                )
 
                 try:
                     for element in env.elements_to_click_on_load:
