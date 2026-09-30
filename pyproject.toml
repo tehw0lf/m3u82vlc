@@ -1,9 +1,21 @@
 [project]
 name = "m3u82vlc"
-version = "0.1.0"
+version = "0.1.1"
 description = "Simple m3u8 stream detector with vlc backed playback&recording functionality"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "cloakbrowser>=0.3.31",
+    "cloakbrowser>=0.5.11",
+]
+
+[tool.ruff]
+line-length = 79
+
+[tool.ruff.lint.isort]
+# env.py is gitignored, so ruff cannot detect it as first-party on its own
+known-first-party = ["env"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.16.9",
 ]
