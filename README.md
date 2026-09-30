@@ -9,8 +9,8 @@ this is a curses based CLI to watch and record m3u8 streams.
 the following options are available and will be read from env.py:
 
 ```python
-base_path # the path to save recordings
-favorites # shortcuts available via arrow up
-elements_to_click_on_load # ids of elements to click
-non_headless_mode_conditions # sites to use with GUI mode
+base_path  # the path to save recordings
+favorites  # shortcuts available via arrow up
+elements_to_click_on_load  # ids of elements to click
+non_headless_mode_conditions  # sites to use with GUI mode
 ```

@@ -1,10 +1,13 @@
 import curses
+import io
 import os
 import subprocess
 import time
-from threading import Event, Timer
+from contextlib import redirect_stderr
+from threading import Timer
 
 from cloakbrowser import launch_context
+from playwright.sync_api import Error as PlaywrightError
 
 import env
 
@@ -19,7 +22,7 @@ def quit_curses(stdscr: curses.window) -> None:
 def quit_browser(context, stdscr: curses.window) -> None:
     try:
         context.close()
-    except Exception as e:
+    except PlaywrightError as e:
         curse_print(stdscr, f"Error while quitting browser: {e}\n")
         stdscr.refresh()
 
@@ -37,7 +40,6 @@ def print_dot(stdscr: curses.window) -> None:
 
 
 def stop_dots() -> None:
-    global timer
     if timer:
         timer.cancel()
 
@@ -87,7 +89,7 @@ def record_stream(m3u8_url: str, output_file: str) -> None:
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        preexec_fn=os.setsid,
+        start_new_session=True,
     )
     time.sleep(1)
     subprocess.Popen(
@@ -98,7 +100,7 @@ def record_stream(m3u8_url: str, output_file: str) -> None:
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        preexec_fn=os.setsid,
+        start_new_session=True,
     )
 
 
@@ -108,6 +110,86 @@ def curse_print(stdscr: curses.window, input: str) -> None:
         stdscr.refresh()
     except curses.error:
         pass
+
+
+def find_m3u8_url(
+    stdscr: curses.window, video_url: str, use_headless: bool, timeout: int
+) -> str | None:
+    """
+    Opens the stream page and returns the first .m3u8 URL seen twice, or None
+    if none shows up within the timeout. Ads only load once, so a URL has to
+    be seen a second time to count.
+    """
+    printed_urls: set[str] = set()
+    m3u8_url_to_play = None
+
+    def register_m3u8_url(url: str) -> None:
+        nonlocal m3u8_url_to_play
+        if url in printed_urls:
+            m3u8_url_to_play = url
+        else:
+            printed_urls.add(url)
+
+    def on_request(request) -> None:
+        if ".m3u8" in request.url:
+            register_m3u8_url(request.url)
+
+    def on_response(response) -> None:
+        try:
+            body = response.json()
+        except PlaywrightError, ValueError:
+            return
+        if isinstance(body, dict):
+            url = body.get("url")
+            if isinstance(url, str) and ".m3u8" in url:
+                register_m3u8_url(url)
+
+    context = None
+    try:
+        # cloakbrowser writes its welcome banner and font warning to
+        # stderr, which would corrupt the curses screen
+        with redirect_stderr(io.StringIO()):
+            context = launch_context(
+                headless=use_headless,
+                viewport={"width": 1920, "height": 1080},
+            )
+        page = context.new_page()
+        page.on("request", on_request)
+        page.on("response", on_response)
+
+        print_dot(stdscr)
+
+        page.goto(video_url, timeout=30000, wait_until="domcontentloaded")
+
+        # The elements form a chain, so stop at the first one that is missing
+        try:
+            for element in env.elements_to_click_on_load:
+                page.locator(f"#{element}").click(timeout=3000)
+        except PlaywrightError:
+            pass
+
+        # The sync Playwright API only dispatches request/response
+        # events while the main thread is inside a Playwright call.
+        # A blocking wait would stop dispatching entirely, so poll
+        # with page.wait_for_timeout() to keep the loop running.
+        deadline = time.monotonic() + timeout
+        try:
+            while m3u8_url_to_play is None and time.monotonic() < deadline:
+                page.wait_for_timeout(250)
+        except PlaywrightError:
+            # Browser window closed by the user: treat as no URL found
+            pass
+
+    except Exception as e:
+        curse_print(stdscr, f"Error occurred: {e}\n")
+        raise
+
+    finally:
+        stop_dots()
+        if context is not None:
+            quit_browser(context, stdscr)
+
+    return m3u8_url_to_play
 
 
 def main(stdscr: curses.window) -> None:
@@ -173,88 +255,14 @@ def main(stdscr: curses.window) -> None:
             stream_name = process_input(video_url)
             output_file = get_unique_file_name(f"{stream_name}.mp4")
 
-            context = None
-            try:
-                use_headless = True
-                for condition in env.non_headless_mode_conditions:
-                    if condition in video_url:
-                        use_headless = False
-                        break
-
-                printed_urls: set[str] = set()
-                m3u8_url_to_play = None
-                m3u8_detected = Event()
-                timer_duration = 10 if use_headless else 600
-
-                context = launch_context(
-                    headless=use_headless,
-                    viewport={"width": 1920, "height": 1080},
-                )
-                page = context.new_page()
-
-                def on_request(request) -> None:
-                    nonlocal m3u8_url_to_play
-                    url = request.url
-                    if ".m3u8" in url:
-                        if url in printed_urls:
-                            m3u8_url_to_play = url
-                            m3u8_detected.set()
-                        else:
-                            printed_urls.add(url)
-
-                def on_response(response) -> None:
-                    nonlocal m3u8_url_to_play
-                    try:
-                        body = response.json()
-                        if isinstance(body, dict):
-                            url = body.get("url", "")
-                            if url and ".m3u8" in url:
-                                if url in printed_urls:
-                                    m3u8_url_to_play = url
-                                    m3u8_detected.set()
-                                else:
-                                    printed_urls.add(url)
-                    except Exception:
-                        pass
-
-                page.on("request", on_request)
-                page.on("response", on_response)
-
-                print_dot(stdscr)
-
-                def timeout_handler():
-                    if not m3u8_detected.is_set():
-                        stop_dots()
-                        curse_print(
-                            stdscr,
-                            f"\nNo .m3u8 URL detected within {timer_duration} seconds. Restarting...\n",
-                        )
-                        m3u8_detected.set()
-
-                timeout_timer = Timer(timer_duration, timeout_handler)
-                timeout_timer.start()
-
-                page.goto(
-                    video_url, timeout=30000, wait_until="domcontentloaded"
-                )
-
-                try:
-                    for element in env.elements_to_click_on_load:
-                        page.locator(f"#{element}").click(timeout=3000)
-                except Exception:
-                    pass
-
-                m3u8_detected.wait()
-                stop_dots()
-                timeout_timer.cancel()
-
-            except Exception as e:
-                curse_print(stdscr, f"Error occurred: {e}\n")
-                raise e
-
-            finally:
-                if context is not None:
-                    quit_browser(context, stdscr)
+            use_headless = not any(
+                condition in video_url
+                for condition in env.non_headless_mode_conditions
+            )
+            timer_duration = 15 if use_headless else 600
+            m3u8_url_to_play = find_m3u8_url(
+                stdscr, video_url, use_headless, timer_duration
+            )
 
             if m3u8_url_to_play:
                 vlc_process = subprocess.Popen(
@@ -286,6 +294,11 @@ def main(stdscr: curses.window) -> None:
                         )
                         quit_vlc(vlc_process)
                         break
+            else:
+                curse_print(
+                    stdscr,
+                    f"\nNo .m3u8 URL detected within {timer_duration} seconds. Restarting...\n",
+                )
 
     except KeyboardInterrupt:
         stop_dots()
