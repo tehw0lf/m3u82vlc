@@ -112,6 +112,20 @@ def curse_print(stdscr: curses.window, input: str) -> None:
         pass
 
 
+def page_was_closed(page) -> bool:
+    """
+    Tells whether a Playwright error came from the page being closed. The
+    navigation error can arrive before the close event, so give the event
+    loop one more turn before checking.
+    """
+    if not page.is_closed():
+        try:
+            page.wait_for_timeout(100)
+        except PlaywrightError:
+            pass
+    return page.is_closed()
+
+
 def find_m3u8_url(
     stdscr: curses.window, video_url: str, use_headless: bool, timeout: int
 ) -> str | None:
@@ -159,26 +173,28 @@ def find_m3u8_url(
 
         print_dot(stdscr)
 
-        page.goto(video_url, timeout=30000, wait_until="domcontentloaded")
-
-        # The elements form a chain, so stop at the first one that is missing
         try:
-            for element in env.elements_to_click_on_load:
-                page.locator(f"#{element}").click(timeout=3000)
-        except PlaywrightError:
-            pass
+            page.goto(video_url, timeout=30000, wait_until="domcontentloaded")
 
-        # The sync Playwright API only dispatches request/response
-        # events while the main thread is inside a Playwright call.
-        # A blocking wait would stop dispatching entirely, so poll
-        # with page.wait_for_timeout() to keep the loop running.
-        deadline = time.monotonic() + timeout
-        try:
+            # The elements form a chain, so stop at the first missing one
+            try:
+                for element in env.elements_to_click_on_load:
+                    page.locator(f"#{element}").click(timeout=3000)
+            except PlaywrightError:
+                if page_was_closed(page):
+                    raise
+
+            # The sync Playwright API only dispatches request/response
+            # events while the main thread is inside a Playwright call.
+            # A blocking wait would stop dispatching entirely, so poll
+            # with page.wait_for_timeout() to keep the loop running.
+            deadline = time.monotonic() + timeout
             while m3u8_url_to_play is None and time.monotonic() < deadline:
                 page.wait_for_timeout(250)
         except PlaywrightError:
-            # Browser window closed by the user: treat as no URL found
-            pass
+            # Browser window closed by the user: keep whatever was found
+            if not page_was_closed(page):
+                raise
 
     except Exception as e:
         curse_print(stdscr, f"Error occurred: {e}\n")
@@ -297,7 +313,8 @@ def main(stdscr: curses.window) -> None:
             else:
                 curse_print(
                     stdscr,
-                    f"\nNo .m3u8 URL detected within {timer_duration} seconds. Restarting...\n",
+                    f"\nNo .m3u8 URL detected within {timer_duration} seconds"
+                    " after page load. Restarting...\n",
                 )
 
     except KeyboardInterrupt:
