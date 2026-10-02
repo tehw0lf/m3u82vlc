@@ -130,19 +130,14 @@ def find_m3u8_url(
     stdscr: curses.window, video_url: str, use_headless: bool, timeout: int
 ) -> str | None:
     """
-    Opens the stream page and returns the first .m3u8 URL seen twice, or None
-    if none shows up within the timeout. Ads only load once, so a URL has to
-    be seen a second time to count.
+    Opens the stream page and returns the first .m3u8 URL seen, or None
+    if none shows up within the timeout.
     """
-    printed_urls: set[str] = set()
     m3u8_url_to_play = None
 
     def register_m3u8_url(url: str) -> None:
         nonlocal m3u8_url_to_play
-        if url in printed_urls:
-            m3u8_url_to_play = url
-        else:
-            printed_urls.add(url)
+        m3u8_url_to_play = url
 
     def on_request(request) -> None:
         if ".m3u8" in request.url:
