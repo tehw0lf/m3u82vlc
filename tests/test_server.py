@@ -11,6 +11,7 @@ AUTH = {"Authorization": "Bearer test-token"}
 def client(monkeypatch):
     # No lifespan, so the detection worker and its browser never start
     server.links.clear()
+    server.reserved_files.clear()
     while not server.pending.empty():
         server.pending.get()
     monkeypatch.setattr(server, "find_recordings", list)
@@ -142,6 +143,59 @@ def test_failed_recording_is_reported(client, monkeypatch):
     response = client.post(f"/api/links/{link['id']}/record", headers=AUTH)
     assert response.json()["state"] == "error"
     assert process.terminated
+
+
+def test_failing_start_does_not_leave_link_starting(client, monkeypatch):
+    def fail(*arguments):
+        raise OSError("ffmpeg is missing")
+
+    monkeypatch.setattr(server, "start_recording", fail)
+    link = client.post(
+        "/api/links", json={"url": "https://a.example/x"}, headers=AUTH
+    ).json()
+    server.links[link["id"]].state = "found"
+
+    failing_client = TestClient(server.app, raise_server_exceptions=False)
+    response = failing_client.post(
+        f"/api/links/{link['id']}/record", headers=AUTH
+    )
+    assert response.status_code == 500
+    assert server.links[link["id"]].state == "error"
+    assert server.reserved_files == set()
+    assert (
+        client.delete(f"/api/links/{link['id']}", headers=AUTH).status_code
+        == 204
+    )
+
+
+def test_overlapping_recordings_get_different_files(client, monkeypatch):
+    ids = []
+    for _ in range(2):
+        link = client.post(
+            "/api/links",
+            json={"url": "https://a.example/nyancat"},
+            headers=AUTH,
+        ).json()
+        server.links[link["id"]].state = "found"
+        ids.append(link["id"])
+    output_files = []
+
+    def wait_for_output(output_file):
+        output_files.append(output_file)
+        if len(output_files) == 1:
+            # The second request arrives before ffmpeg created the first file
+            client.post(f"/api/links/{ids[1]}/record", headers=AUTH)
+        return True
+
+    monkeypatch.setattr(server, "start_recording", lambda *arguments: None)
+    monkeypatch.setattr(server, "wait_for_output", wait_for_output)
+    client.post(f"/api/links/{ids[0]}/record", headers=AUTH)
+
+    assert output_files == [
+        "/nonexistent-recordings/nyancat.ts",
+        "/nonexistent-recordings/nyancat_1.ts",
+    ]
+    assert server.reserved_files == set()
 
 
 def test_only_recordings_can_be_stopped(client, monkeypatch):

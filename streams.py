@@ -5,6 +5,7 @@ import re
 import signal
 import subprocess
 import time
+from collections.abc import Collection
 from contextlib import redirect_stderr
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
@@ -39,20 +40,19 @@ def process_input(input: str) -> str:
     return stream_name
 
 
-def get_unique_file_name(base_name: str) -> str:
+def get_unique_file_name(base_name: str, taken: Collection[str] = ()) -> str:
     """
     Return a unique file name based on a stream name, by incrementing a counter.
+    Names in taken are skipped as well, for files that do not exist yet.
     """
     base_name = os.path.join(env.base_path, base_name)
-    if not os.path.exists(base_name):
-        return base_name
     name, ext = os.path.splitext(base_name)
+    new_name = base_name
     counter = 1
-    while True:
+    while os.path.exists(new_name) or new_name in taken:
         new_name = f"{name}_{counter}{ext}"
-        if not os.path.exists(new_name):
-            return new_name
         counter += 1
+    return new_name
 
 
 @dataclass

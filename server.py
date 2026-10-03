@@ -51,6 +51,9 @@ class Link:
 
 links: dict[str, Link] = {}
 lock = threading.Lock()
+# ffmpeg creates its output file only once data arrives, so the names
+# handed out in the meantime are kept here to not use them twice
+reserved_files: set[str] = set()
 # Each detection launches its own browser, so they run one after another
 pending: queue.Queue[Link] = queue.Queue()
 
@@ -176,20 +179,28 @@ def record_link(link_id: str) -> dict[str, str]:
         if link.state != "found":
             raise HTTPException(status_code=409, detail="No stream to record")
         link.state = "starting"
-    output_file = get_unique_file_name(f"{process_input(link.url)}.ts")
-    process = start_recording(link.stream, output_file, link.headers)
-    started = wait_for_output(output_file)
-    if not started:
-        # The playlist session has probably expired in the meantime
-        process.terminate()
-    with lock:
-        if started:
-            link.state, link.detail = "recording", ""
-            link.output_file = output_file
-        else:
-            link.state = "error"
-            link.detail = "Recording did not start, send the link again"
-        return describe_link(link)
+        output_file = get_unique_file_name(
+            f"{process_input(link.url)}.ts", reserved_files
+        )
+        reserved_files.add(output_file)
+    process = None
+    started = False
+    try:
+        process = start_recording(link.stream, output_file, link.headers)
+        started = wait_for_output(output_file)
+    finally:
+        if process is not None and not started:
+            # The playlist session has probably expired in the meantime
+            process.terminate()
+        with lock:
+            reserved_files.discard(output_file)
+            if started:
+                link.state, link.detail = "recording", ""
+                link.output_file = output_file
+            else:
+                link.state = "error"
+                link.detail = "Recording did not start, send the link again"
+    return describe_link(link)
 
 
 @api.delete("/recordings/{pid}", status_code=204)

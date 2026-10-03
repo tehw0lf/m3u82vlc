@@ -100,3 +100,14 @@ def test_start_recording_command(monkeypatch):
     assert "Referer: https://site.example/\r\n" in split
     assert split[-3:] == ["-f", "mpegts", "/out.ts"]
     assert single.count("-i") == 1 and "-copyts" not in single
+
+
+def test_get_unique_file_name_skips_existing_and_taken(tmp_path, monkeypatch):
+    monkeypatch.setattr(streams.env, "base_path", str(tmp_path))
+    first = str(tmp_path / "nyancat.ts")
+    assert streams.get_unique_file_name("nyancat.ts") == first
+    (tmp_path / "nyancat.ts").touch()
+    second = str(tmp_path / "nyancat_1.ts")
+    assert streams.get_unique_file_name("nyancat.ts") == second
+    third = str(tmp_path / "nyancat_2.ts")
+    assert streams.get_unique_file_name("nyancat.ts", {second}) == third
