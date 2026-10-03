@@ -5,6 +5,8 @@ import time
 from threading import Timer
 from urllib.parse import urlparse
 
+from playwright.sync_api import Error as PlaywrightError
+
 import env
 from streams import (
     DETECTION_TIMEOUT,
@@ -305,9 +307,11 @@ def main(screen: curses.window) -> None:
             print_dot(stdscr)
             try:
                 stream, headers = find_m3u8_url(video_url)
-            except Exception as e:
-                curse_print(stdscr, f"Error occurred: {e}\n")
-                raise
+            except PlaywrightError as e:
+                # The page could not be loaded, e.g. a mistyped URL
+                reason = str(e).partition("\n")[0]
+                curse_print(stdscr, f"\nError occurred: {reason}\n")
+                continue
             finally:
                 stop_dots()
 
