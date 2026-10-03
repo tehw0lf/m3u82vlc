@@ -4,6 +4,7 @@ import os
 import re
 import signal
 import subprocess
+import threading
 import time
 from collections.abc import Collection
 from contextlib import redirect_stderr
@@ -25,6 +26,16 @@ DETECTION_TIMEOUT = 15
 
 # Request headers of the browser that VLC and ffmpeg send as well
 FORWARDED_HEADERS = ("user-agent", "referer", "origin")
+
+# Recordings started by this program. Their exit status has to be collected
+# once they end, otherwise they stay behind as defunct processes
+started_processes: list[subprocess.Popen] = []
+started_processes_lock = threading.Lock()
+# Exit codes of the recordings that ended, by their output file
+exit_codes: dict[str, int] = {}
+
+# ffmpeg exits with this code when a signal ends it
+FFMPEG_STOPPED = 255
 
 
 def process_input(input: str) -> str:
@@ -272,6 +283,30 @@ class Recording:
     elapsed: float
 
 
+def reap_recordings() -> None:
+    """
+    Collects the exit status of the recordings that ended, for example
+    because the stream is over, and keeps it for take_exit_code().
+    """
+    with started_processes_lock:
+        running = []
+        for process in started_processes:
+            if process.poll() is None:
+                running.append(process)
+            else:
+                exit_codes[process.args[-1]] = process.returncode
+        started_processes[:] = running
+
+
+def take_exit_code(output_file: str) -> int | None:
+    """
+    Returns the exit code of an ended recording once, or None if it was not
+    started by this program or has not been collected yet.
+    """
+    with started_processes_lock:
+        return exit_codes.pop(output_file, None)
+
+
 def find_recordings() -> list[Recording]:
     """
     Finds the running ffmpeg recordings by their output file in base_path.
@@ -304,6 +339,9 @@ def find_recordings() -> list[Recording]:
             continue
         started = start_ticks / os.sysconf("SC_CLK_TCK")
         recordings.append(Recording(int(entry), output_file, uptime - started))
+    # Collected after reading the process list, so a recording that is no
+    # longer listed always has its exit code available
+    reap_recordings()
     return sorted(recordings, key=lambda recording: -recording.elapsed)
 
 
@@ -488,9 +526,12 @@ def start_recording(
         "mpegts",
         output_file,
     ]
-    return subprocess.Popen(
+    process = subprocess.Popen(
         ["nohup", *record_command],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
+    with started_processes_lock:
+        started_processes.append(process)
+    return process
