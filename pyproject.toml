@@ -6,7 +6,17 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "cloakbrowser>=0.5.11",
+    "fastapi>=0.142.2",
+    "uvicorn>=0.54.0",
 ]
+
+[tool.setuptools]
+# Listed explicitly, as the local env.py would otherwise be discovered too
+py-modules = ["main", "page", "server", "streams"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 79
@@ -17,5 +27,7 @@ known-first-party = ["env"]
 
 [dependency-groups]
 dev = [
+    "httpx2>=2.13.1",
+    "pytest>=9.1.1",
     "ruff>=0.16.9",
 ]

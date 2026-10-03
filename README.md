@@ -12,6 +12,33 @@ recordings run in the background and keep going when the player or the
 terminal is closed. the panel at the top lists the running recordings.
 press TAB at the URL prompt to select one, x to stop it and y to confirm.
 
+## remote control
+
+`server.py` offers the same detection and recording without a terminal or
+player, for example from a phone in the LAN:
+
+```bash
+uv run python server.py
+```
+
+it prints the address of the web page including the access token. send a
+stream URL there and the page shows whether a stream was found (green) or
+not (red). a found stream can be recorded, and running recordings can be
+stopped after a confirmation. links are checked one after another.
+
+the same is available as a REST API under `/api`, with the token sent as
+`Authorization: Bearer <token>`:
+
+| request | purpose |
+| --- | --- |
+| `GET /api/state` | links and running recordings |
+| `POST /api/links` with `{"url": "..."}` | queue a link for detection |
+| `POST /api/links/<id>/record` | record a found stream |
+| `DELETE /api/links/<id>` | remove a link from the list |
+| `DELETE /api/recordings/<pid>` | stop a recording |
+
+the connection is plain HTTP, so only use it in a network you trust.
+
 ## requirements
 
 - vlc for playback
@@ -26,5 +53,7 @@ the following options are available and will be read from env.py:
 base_path  # the path to save recordings
 favorites  # shortcuts available via arrow up
 elements_to_click_on_load  # ids of elements to click
-non_headless_mode_conditions  # sites to use with GUI mode
+server_host  # address the remote control listens on, default 127.0.0.1
+server_port  # port of the remote control, default 8338
+server_token  # access token, generated on every start if not set
 ```
