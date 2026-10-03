@@ -765,7 +765,7 @@ def main(screen: curses.window) -> None:
                 history.append(raw_input)
 
             stream_name = process_input(video_url)
-            output_file = get_unique_file_name(f"{stream_name}.mp4")
+            output_file = get_unique_file_name(f"{stream_name}.ts")
 
             use_headless = not any(
                 condition in video_url
