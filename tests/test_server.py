@@ -125,6 +125,35 @@ def test_record_starts_recording(client, monkeypatch):
     assert state["links"][0]["state"] == "finished"
 
 
+@pytest.mark.parametrize(
+    ("exit_code", "state", "detail"),
+    [
+        (None, "finished", ""),
+        (0, "finished", "Stream ended"),
+        (255, "finished", "Stopped"),
+        (145, "error", "Recording failed, ffmpeg exit code 145"),
+    ],
+)
+def test_ended_recording_reports_its_exit_code(
+    client, monkeypatch, exit_code, state, detail
+):
+    taken = []
+    monkeypatch.setattr(
+        server,
+        "take_exit_code",
+        lambda output_file: taken.append(output_file) or exit_code,
+    )
+    link = client.post(
+        "/api/links", json={"url": "https://a.example/nyancat"}, headers=AUTH
+    ).json()
+    stored = server.links[link["id"]]
+    stored.state, stored.output_file = "recording", "/r/nyancat.ts"
+
+    described = client.get("/api/state", headers=AUTH).json()["links"][0]
+    assert (described["state"], described["detail"]) == (state, detail)
+    assert taken == ["/r/nyancat.ts"]
+
+
 def test_failed_recording_is_reported(client, monkeypatch):
     class Process:
         terminated = False

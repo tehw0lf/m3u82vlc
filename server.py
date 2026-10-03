@@ -15,6 +15,7 @@ from pydantic import BaseModel
 import env
 from page import INDEX_HTML
 from streams import (
+    FFMPEG_STOPPED,
     SplitStream,
     find_m3u8_url,
     find_recordings,
@@ -23,6 +24,7 @@ from streams import (
     recording_size,
     start_recording,
     stop_recording,
+    take_exit_code,
     wait_for_output,
 )
 
@@ -85,6 +87,21 @@ def detect_link(link: Link) -> None:
         link.state, link.detail = state, detail
 
 
+def describe_exit(exit_code: int | None) -> tuple[str, str]:
+    """
+    Turns the exit code of an ended recording into the state and detail of
+    its link.
+    """
+    if exit_code is None:
+        # Started by an earlier run of the server, so the code is unknown
+        return "finished", ""
+    if exit_code == 0:
+        return "finished", "Stream ended"
+    if exit_code == FFMPEG_STOPPED:
+        return "finished", "Stopped"
+    return "error", f"Recording failed, ffmpeg exit code {exit_code}"
+
+
 def require_token(
     authorization: Annotated[str | None, Header()] = None,
 ) -> None:
@@ -128,7 +145,9 @@ def get_state() -> dict[str, list[dict]]:
             if link.state == "recording" and (
                 link.output_file not in output_files
             ):
-                link.state = "finished"
+                link.state, link.detail = describe_exit(
+                    take_exit_code(link.output_file)
+                )
         described_links = [describe_link(link) for link in links.values()]
     return {
         "links": described_links,

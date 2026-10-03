@@ -1,3 +1,6 @@
+import os
+import time
+
 import streams
 from streams import SplitStream
 
@@ -100,6 +103,34 @@ def test_start_recording_command(monkeypatch):
     assert "Referer: https://site.example/\r\n" in split
     assert split[-3:] == ["-f", "mpegts", "/out.ts"]
     assert single.count("-i") == 1 and "-copyts" not in single
+
+
+def test_find_recordings_reaps_ended_recording(monkeypatch):
+    monkeypatch.setattr(streams, "started_processes", [])
+    monkeypatch.setattr(streams, "exit_codes", {})
+    monkeypatch.setattr(
+        streams, "ffmpeg_input", lambda url, headers: ["-version"]
+    )
+    # "ffmpeg -version -c copy -f mpegts <file>" ends at once, like a
+    # recording whose stream is over
+    process = streams.start_recording("x.m3u8", "/nonexistent/out.ts", {})
+    pid = process.pid
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        with open(f"/proc/{pid}/stat") as file:
+            if file.read().rpartition(")")[2].split()[0] == "Z":
+                break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("ffmpeg did not end")
+
+    streams.find_recordings()
+
+    assert not os.path.exists(f"/proc/{pid}")
+    assert streams.started_processes == []
+    # The exit code is handed out once
+    assert streams.take_exit_code("/nonexistent/out.ts") is not None
+    assert streams.take_exit_code("/nonexistent/out.ts") is None
 
 
 def test_get_unique_file_name_skips_existing_and_taken(tmp_path, monkeypatch):
