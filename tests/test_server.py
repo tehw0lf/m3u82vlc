@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import server
-from streams import Recording
+from streams import Recording, SplitStream
 
 AUTH = {"Authorization": "Bearer test-token"}
 
@@ -227,3 +227,56 @@ def test_link_can_be_removed_unless_in_use(client):
         == 204
     )
     assert server.links == {}
+
+
+@pytest.mark.parametrize(
+    ("result", "state", "detail"),
+    [
+        (
+            (SplitStream("v.m3u8", "a.m3u8", "1920x1080"), {}),
+            "found",
+            "1920x1080",
+        ),
+        (("master.m3u8", {"Referer": "r"}), "found", ""),
+        ((None, {}), "not_found", ""),
+        (
+            RuntimeError("browser crashed\ncall log"),
+            "error",
+            "browser crashed",
+        ),
+    ],
+)
+def test_worker_takes_link_to_its_final_state(
+    client, monkeypatch, result, state, detail
+):
+    def find_m3u8_url(url):
+        assert server.links[link["id"]].state == "searching"
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(server, "find_m3u8_url", find_m3u8_url)
+    link = client.post(
+        "/api/links", json={"url": "https://a.example/x"}, headers=AUTH
+    ).json()
+
+    server.detect_link(server.pending.get_nowait())
+
+    described = client.get("/api/state", headers=AUTH).json()["links"][0]
+    assert (described["state"], described["detail"]) == (state, detail)
+    if state == "found":
+        stored = server.links[link["id"]]
+        assert (stored.stream, stored.headers) == result
+
+
+def test_worker_skips_removed_link(client, monkeypatch):
+    monkeypatch.setattr(server, "find_m3u8_url", pytest.fail)
+    link = client.post(
+        "/api/links", json={"url": "https://a.example/x"}, headers=AUTH
+    ).json()
+    assert (
+        client.delete(f"/api/links/{link['id']}", headers=AUTH).status_code
+        == 204
+    )
+
+    server.detect_link(server.pending.get_nowait())

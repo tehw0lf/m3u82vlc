@@ -60,26 +60,29 @@ pending: queue.Queue[Link] = queue.Queue()
 
 def detect_links() -> None:
     while True:
-        link = pending.get()
-        with lock:
-            if link.id not in links:
-                continue
-            link.state = "searching"
-        try:
-            stream, headers = find_m3u8_url(link.url)
-        # Any failure must only fail this link and not end the worker
-        except Exception as e:  # noqa: BLE001
-            state, detail = "error", str(e).partition("\n")[0][:200]
+        detect_link(pending.get())
+
+
+def detect_link(link: Link) -> None:
+    with lock:
+        if link.id not in links:
+            return
+        link.state = "searching"
+    try:
+        stream, headers = find_m3u8_url(link.url)
+    # Any failure must only fail this link and not end the worker
+    except Exception as e:  # noqa: BLE001
+        state, detail = "error", str(e).partition("\n")[0][:200]
+    else:
+        if isinstance(stream, SplitStream):
+            state, detail = "found", stream.resolution or ""
+        elif stream:
+            state, detail = "found", ""
         else:
-            if isinstance(stream, SplitStream):
-                state, detail = "found", stream.resolution or ""
-            elif stream:
-                state, detail = "found", ""
-            else:
-                state, detail = "not_found", ""
-            link.stream, link.headers = stream, headers
-        with lock:
-            link.state, link.detail = state, detail
+            state, detail = "not_found", ""
+        link.stream, link.headers = stream, headers
+    with lock:
+        link.state, link.detail = state, detail
 
 
 def require_token(
