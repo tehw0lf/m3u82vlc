@@ -1,6 +1,6 @@
 [project]
 name = "m3u82vlc"
-version = "0.1.6"
+version = "0.1.7"
 description = "Simple m3u8 stream detector with vlc backed playback&recording functionality"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -12,7 +12,7 @@ dependencies = [
 
 [tool.setuptools]
 # Listed explicitly, as the local env.py would otherwise be discovered too
-py-modules = ["main", "page", "server", "streams"]
+py-modules = ["main", "page", "server", "streams", "tunnel"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

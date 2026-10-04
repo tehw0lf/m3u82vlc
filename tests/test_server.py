@@ -99,7 +99,9 @@ def test_found_stream_is_recorded(client, monkeypatch):
     monkeypatch.setattr(
         server, "start_recording", lambda *arguments: started.append(arguments)
     )
-    monkeypatch.setattr(server, "wait_for_output", lambda output_file: True)
+    monkeypatch.setattr(
+        server, "wait_for_output", lambda output_file, process: True
+    )
     link = queue_link(client)
 
     server.detect_link(server.pending.get_nowait())
@@ -144,23 +146,115 @@ def test_ended_recording_reports_its_exit_code(
     assert taken == ["/r/nyancat.ts"]
 
 
+class Process:
+    """A recorder that never writes data"""
+
+    def __init__(self):
+        self.terminated = False
+
+    def terminate(self):
+        self.terminated = True
+
+    def wait(self, timeout):
+        assert self.terminated
+
+
+def test_recorder_that_does_not_end_is_killed(monkeypatch):
+    class StuckProcess(Process):
+        pid = 4242
+
+        def wait(self, timeout=None):
+            if timeout is not None:
+                raise server.subprocess.TimeoutExpired("ffmpeg", timeout)
+
+    killed = []
+    monkeypatch.setattr(server.os, "killpg", lambda *call: killed.append(call))
+
+    server.end_process(StuckProcess())
+
+    assert killed == [(4242, server.signal.SIGKILL)]
+
+
 def test_failed_recording_is_reported(client, monkeypatch):
-    class Process:
-        terminated = False
+    processes = []
 
-        def terminate(self):
-            self.terminated = True
+    def start_recording(*arguments):
+        processes.append(Process())
+        return processes[-1]
 
-    process = Process()
-    monkeypatch.setattr(server, "start_recording", lambda *arguments: process)
-    monkeypatch.setattr(server, "wait_for_output", lambda output_file: False)
+    monkeypatch.setattr(server, "start_recording", start_recording)
+    monkeypatch.setattr(
+        server, "wait_for_output", lambda output_file, process: False
+    )
     link = queue_link(client)
 
     server.record_link(link, "m.m3u8", {})
 
     assert link.state == "error"
-    assert link.detail == "Recording did not start, send the link again"
-    assert process.terminated
+    assert link.detail == "Recording did not start"
+    assert len(processes) == server.START_ATTEMPTS
+    assert all(process.terminated for process in processes)
+
+
+def test_recording_is_started_again_after_failed_start(client, monkeypatch):
+    processes = []
+
+    def start_recording(*arguments):
+        processes.append(Process())
+        return processes[-1]
+
+    monkeypatch.setattr(server, "start_recording", start_recording)
+    # The first recorder ran into a dropped connection
+    monkeypatch.setattr(
+        server,
+        "wait_for_output",
+        lambda output_file, process: process is not processes[0],
+    )
+    link = queue_link(client)
+
+    server.record_link(link, "m.m3u8", {})
+
+    assert link.state == "recording"
+    assert [process.terminated for process in processes] == [True, False]
+
+
+def test_failed_link_can_be_retried(client, monkeypatch):
+    link = queue_link(client)
+    server.pending.get_nowait()
+    retry = f"/api/links/{link.id}/retry"
+    for state in ("waiting", "searching", "starting", "recording"):
+        link.state = state
+        monkeypatch.setattr(
+            server,
+            "find_recordings",
+            lambda: [Recording(pid=1, output_file="/r/x.ts", elapsed=1)],
+        )
+        link.output_file = "/r/x.ts"
+        assert client.post(retry, headers=AUTH).status_code == 409
+    assert server.pending.empty()
+
+    link.state, link.detail = "error", "Recording did not start"
+    response = client.post(retry, headers=AUTH)
+    assert response.status_code == 200
+    assert response.json()["state"] == "waiting"
+    assert (link.detail, link.output_file) == ("", None)
+    assert server.pending.get_nowait() is link
+
+    assert (
+        client.post("/api/links/unknown/retry", headers=AUTH).status_code
+        == 404
+    )
+
+
+def test_adopted_recording_cannot_be_retried(client, monkeypatch):
+    recording = Recording(pid=1, output_file="/r/older.ts", elapsed=90)
+    monkeypatch.setattr(server, "find_recordings", lambda: [recording])
+    adopted = client.get("/api/state", headers=AUTH).json()["links"][0]
+    monkeypatch.setattr(server, "find_recordings", list)
+
+    response = client.post(f"/api/links/{adopted['id']}/retry", headers=AUTH)
+    assert response.status_code == 409
+    assert server.pending.empty()
 
 
 def test_failing_start_does_not_leave_link_starting(client, monkeypatch):
@@ -184,7 +278,7 @@ def test_recordings_of_the_same_name_get_different_files(client, monkeypatch):
     first, second = queue_link(client), queue_link(client)
     output_files = []
 
-    def wait_for_output(output_file):
+    def wait_for_output(output_file, process):
         # ffmpeg has not created the file of the first recording yet
         output_files.append(output_file)
         assert output_file in server.reserved_files
@@ -269,7 +363,9 @@ def test_worker_takes_link_to_its_final_state(
     recorded = []
     monkeypatch.setattr(server, "find_m3u8_url", find_m3u8_url)
     monkeypatch.setattr(server, "start_recording", start_recording)
-    monkeypatch.setattr(server, "wait_for_output", lambda output_file: True)
+    monkeypatch.setattr(
+        server, "wait_for_output", lambda output_file, process: True
+    )
     link = queue_link(client, "https://a.example/x")
 
     server.detect_link(server.pending.get_nowait())
@@ -332,16 +428,12 @@ def test_recording_without_link_is_adopted(client, monkeypatch):
 def test_starting_recording_is_not_adopted(client, monkeypatch):
     link = queue_link(client)
 
-    def wait_for_output(output_file):
+    def wait_for_output(output_file, process):
         # ffmpeg is already in the process list while the link is starting
         recording = Recording(pid=1, output_file=output_file, elapsed=1)
         monkeypatch.setattr(server, "find_recordings", lambda: [recording])
         assert len(client.get("/api/state", headers=AUTH).json()["links"]) == 1
         return False
-
-    class Process:
-        def terminate(self):
-            pass
 
     monkeypatch.setattr(
         server, "start_recording", lambda *arguments: Process()
