@@ -485,3 +485,20 @@ def test_worker_skips_removed_link(client, monkeypatch):
     )
 
     server.detect_link(server.pending.get_nowait())
+
+
+def test_tls_options_need_certificate_and_key(tmp_path):
+    cert_file, key_file = tmp_path / "cert.pem", tmp_path / "key.pem"
+    cert_file.touch()
+    assert server.tls_options(None, None) == {}
+    for files in ((str(cert_file), None), (None, str(key_file))):
+        with pytest.raises(ValueError, match="set together"):
+            server.tls_options(*files)
+    with pytest.raises(ValueError, match="does not exist"):
+        server.tls_options(str(cert_file), str(key_file))
+
+    key_file.touch()
+    assert server.tls_options(str(cert_file), str(key_file)) == {
+        "ssl_certfile": str(cert_file),
+        "ssl_keyfile": str(key_file),
+    }
