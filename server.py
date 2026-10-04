@@ -114,8 +114,11 @@ def record_link(
         process.terminate()
     with lock:
         reserved_files.discard(output_file)
+        # Kept for a failed start as well, so an ffmpeg that is still
+        # shutting down is not taken for a recording without a link
+        link.output_file = output_file
         if started:
-            link.state, link.output_file = "recording", output_file
+            link.state = "recording"
         else:
             link.state, link.detail = "error", detail
 
@@ -152,6 +155,47 @@ def update_ended_links(recordings: list[Recording]) -> None:
             )
 
 
+def make_room() -> bool:
+    """
+    Drops the oldest link that is done once the list is full. The lock must
+    be held.
+    """
+    if len(links) < MAX_LINKS:
+        return True
+    for link_id, link in links.items():
+        if link.state not in ACTIVE_STATES:
+            del links[link_id]
+            return True
+    return False
+
+
+def adopt_recordings(recordings: list[Recording]) -> None:
+    """
+    Adds a link for each recording that has none, as it was started in the
+    terminal or by an earlier run of the server. This way the list shows
+    when it has ended. The lock must be held.
+    """
+    known = {link.output_file for link in links.values()} | reserved_files
+    for recording in recordings:
+        if recording.output_file in known or not make_room():
+            continue
+        link = Link(
+            id=secrets.token_hex(8),
+            url="",
+            state="recording",
+            output_file=recording.output_file,
+        )
+        links[link.id] = link
+        known.add(recording.output_file)
+
+
+def link_name(link: Link) -> str:
+    if link.url:
+        return process_input(link.url)
+    # A recording without a link is only known by its file
+    return os.path.splitext(os.path.basename(link.output_file))[0]
+
+
 def require_token(
     authorization: Annotated[str | None, Header()] = None,
 ) -> None:
@@ -166,7 +210,7 @@ def describe_link(link: Link) -> dict[str, str]:
     return {
         "id": link.id,
         "url": link.url,
-        "name": process_input(link.url),
+        "name": link_name(link),
         "state": link.state,
         "detail": link.detail,
     }
@@ -190,7 +234,9 @@ api = APIRouter(prefix="/api", dependencies=[Depends(require_token)])
 def get_state() -> dict[str, list[dict]]:
     recordings = find_recordings()
     with lock:
+        # Ended links first, so they can make room for the adopted ones
         update_ended_links(recordings)
+        adopt_recordings(recordings)
         described_links = [describe_link(link) for link in links.values()]
     return {
         "links": described_links,
@@ -214,15 +260,8 @@ def add_link(request: LinkRequest) -> dict[str, str]:
         raise HTTPException(status_code=422, detail="Not a http(s) URL")
     link = Link(id=secrets.token_hex(8), url=url)
     with lock:
-        if len(links) >= MAX_LINKS:
-            done = [
-                link_id
-                for link_id, old_link in links.items()
-                if old_link.state not in ACTIVE_STATES
-            ]
-            if not done:
-                raise HTTPException(status_code=429, detail="Queue is full")
-            del links[done[0]]
+        if not make_room():
+            raise HTTPException(status_code=429, detail="Queue is full")
         links[link.id] = link
     pending.put(link)
     return describe_link(link)

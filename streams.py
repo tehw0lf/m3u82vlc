@@ -56,7 +56,8 @@ def get_unique_file_name(base_name: str, taken: Collection[str] = ()) -> str:
     Return a unique file name based on a stream name, by incrementing a counter.
     Names in taken are skipped as well, for files that do not exist yet.
     """
-    base_name = os.path.join(env.base_path, base_name)
+    # Absolute, as find_recordings reports the output files that way
+    base_name = os.path.join(os.path.abspath(env.base_path), base_name)
     name, ext = os.path.splitext(base_name)
     new_name = base_name
     counter = 1
