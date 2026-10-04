@@ -276,8 +276,13 @@ def wait_for_output(
 TUNNEL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tunnel.py")
 
 
+# Microseconds without data after which ffmpeg gives up on a request. A
+# server that stops answering would otherwise halt the recording for good
+READ_TIMEOUT = 15_000_000
+
+
 def ffmpeg_input(url: str, headers: dict[str, str]) -> list[str]:
-    options = []
+    options = ["-rw_timeout", str(READ_TIMEOUT)]
     if "User-Agent" in headers:
         options += ["-user_agent", headers["User-Agent"]]
     other_headers = "".join(

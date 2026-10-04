@@ -20,33 +20,79 @@ ATTEMPT_INTERVAL = 0.3
 # Attempts made before a connection counts as failed
 ATTEMPTS = 20
 
+# Seconds the command has to send its greeting after asking for a server
+GREETING_TIMEOUT = 10
+
+# First byte of a TLS record that carries a handshake message
+TLS_HANDSHAKE = 0x16
+
+Connection = tuple[asyncio.StreamReader, asyncio.StreamWriter, bytes]
+
+
+async def attempt_connection(
+    host: str, port: int, greeting: bytes
+) -> Connection:
+    """
+    Connects to a server, sends the greeting and waits for the first data
+    of its answer. A connection that is set up may still never be answered,
+    so only the answer tells that it works.
+    """
+    reader, writer = await asyncio.open_connection(host, port)
+    try:
+        writer.write(greeting)
+        await writer.drain()
+        answer = await reader.read(65536)
+        if not answer:
+            raise ConnectionError("Server closed the connection")
+    except BaseException:
+        writer.close()
+        raise
+    return reader, writer, answer
+
 
 async def open_connection(
-    host: str, port: int
-) -> tuple[asyncio.StreamReader, asyncio.StreamWriter] | None:
+    host: str, port: int, greeting: bytes
+) -> Connection | None:
     """
-    Connects to a server and returns the first attempt that gets through,
-    or None if none of them does.
+    Returns the first connection the server answers on, along with the
+    start of its answer, or None if it answers on none of them.
     """
     attempts: set[asyncio.Task] = set()
     try:
         for _ in range(ATTEMPTS):
             attempts.add(
-                asyncio.ensure_future(asyncio.open_connection(host, port))
+                asyncio.ensure_future(attempt_connection(host, port, greeting))
             )
             done, _ = await asyncio.wait(
                 attempts,
                 timeout=ATTEMPT_INTERVAL,
                 return_when=asyncio.FIRST_COMPLETED,
             )
-            for attempt in done:
-                attempts.discard(attempt)
-                if attempt.exception() is None:
-                    return attempt.result()
+            attempts -= done
+            answered = [
+                attempt.result()
+                for attempt in done
+                if attempt.exception() is None
+            ]
+            # Only one of the connections answered at the same time is used
+            for _, writer, _ in answered[1:]:
+                writer.close()
+            if answered:
+                return answered[0]
         return None
     finally:
         for attempt in attempts:
             attempt.cancel()
+
+
+async def read_greeting(reader: asyncio.StreamReader) -> bytes:
+    """
+    Reads what the command sends first, which for https is one TLS record.
+    """
+    header = await reader.readexactly(5)
+    if header[0] != TLS_HANDSHAKE:
+        return header
+    return header + await reader.readexactly(int.from_bytes(header[3:]))
 
 
 async def forward(
@@ -67,29 +113,33 @@ async def handle_client(
 ) -> None:
     """
     Serves one CONNECT request, which is what ffmpeg sends for https, and
-    passes the data on in both directions afterwards.
+    passes the data on in both directions afterwards. The server is only
+    connected once the greeting for it is known, as the greeting is sent
+    with every attempt.
     """
     server = None
     try:
         request = await reader.readuntil(b"\r\n\r\n")
         method, target, _ = request.split(b"\r\n")[0].decode().split(" ")
         host, _, port = target.rpartition(":")
-        if method == "CONNECT":
-            server = await open_connection(host.strip("[]"), int(port))
-    except OSError, ValueError, asyncio.IncompleteReadError:
-        pass
-    try:
-        if server is None:
-            writer.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
-            await writer.drain()
-            writer.close()
-            return
+        if method != "CONNECT":
+            raise ValueError("Not a CONNECT request")
         writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
         await writer.drain()
-    except OSError:
-        writer.close()
+        greeting = await asyncio.wait_for(
+            read_greeting(reader), GREETING_TIMEOUT
+        )
+        server = await open_connection(host.strip("[]"), int(port), greeting)
+        if server is not None:
+            writer.write(server[2])
+            await writer.drain()
+    except OSError, ValueError, TimeoutError, asyncio.IncompleteReadError:
         if server is not None:
             server[1].close()
+        server = None
+    if server is None:
+        # The command takes the closed connection for a failed request
+        writer.close()
         return
     await asyncio.gather(
         forward(reader, server[1]), forward(server[0], writer)

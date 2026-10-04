@@ -103,6 +103,8 @@ def test_start_recording_command(monkeypatch):
     assert "Referer: https://site.example/\r\n" in split
     assert split[-3:] == ["-f", "mpegts", "/out.ts"]
     assert single.count("-i") == 1 and "-copyts" not in single
+    # Every input gives up on a server that stops answering
+    assert split.count("-rw_timeout") == 2 and "-rw_timeout" in single
 
 
 def test_wait_for_output_ends_with_the_recorder(tmp_path):

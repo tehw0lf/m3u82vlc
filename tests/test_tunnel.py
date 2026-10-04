@@ -6,24 +6,52 @@ import tunnel
 from streams import TUNNEL
 
 
-def test_connection_is_made_again_while_attempts_hang(monkeypatch):
-    calls = []
+class Writer:
+    def __init__(self):
+        self.sent = b""
+        self.closed = False
+
+    def write(self, data):
+        self.sent += data
+
+    async def drain(self):
+        pass
+
+    def close(self):
+        self.closed = True
+
+
+class Reader:
+    def __init__(self, answers):
+        self.answers = answers
+
+    async def read(self, size):
+        if not self.answers:
+            # A server that never answers
+            await asyncio.sleep(3600)
+        return self.answers.pop(0)
+
+
+def test_connection_is_made_again_until_the_server_answers(monkeypatch):
+    writers = []
 
     async def open_connection(host, port):
-        calls.append((host, port))
-        if len(calls) < 3:
-            # A dropped connection is never answered
-            await asyncio.sleep(3600)
-        return "reader", "writer"
+        assert (host, port) == ("a.example", 443)
+        writers.append(Writer())
+        # The first connections are set up, but never answered
+        answers = [b"answer"] if len(writers) == 3 else []
+        return Reader(answers), writers[-1]
 
     monkeypatch.setattr(tunnel, "ATTEMPT_INTERVAL", 0.01)
     monkeypatch.setattr(tunnel.asyncio, "open_connection", open_connection)
 
-    assert asyncio.run(tunnel.open_connection("a.example", 443)) == (
-        "reader",
-        "writer",
+    _, writer, answer = asyncio.run(
+        tunnel.open_connection("a.example", 443, b"greeting")
     )
-    assert calls == [("a.example", 443)] * 3
+
+    assert answer == b"answer" and writer is writers[2]
+    assert [writer.sent for writer in writers] == [b"greeting"] * 3
+    assert [writer.closed for writer in writers] == [True, True, False]
 
 
 def test_unreachable_server_is_given_up(monkeypatch):
@@ -33,17 +61,22 @@ def test_unreachable_server_is_given_up(monkeypatch):
     monkeypatch.setattr(tunnel, "ATTEMPT_INTERVAL", 0.01)
     monkeypatch.setattr(tunnel.asyncio, "open_connection", open_connection)
 
-    assert asyncio.run(tunnel.open_connection("a.example", 443)) is None
+    assert asyncio.run(tunnel.open_connection("a.example", 443, b"")) is None
 
 
 def test_command_reaches_a_server_through_the_proxy():
+    # One TLS handshake record, as the proxy waits for a complete one
+    greeting = bytes([tunnel.TLS_HANDSHAKE, 3, 1, 0, 5]) + b"hello"
+
     async def scenario():
-        async def greet(reader, writer):
-            writer.write(b"hello")
+        async def answer(reader, writer):
+            writer.write((await reader.readexactly(len(greeting)))[::-1])
+            await writer.drain()
+            writer.write(await reader.read(100))
             await writer.drain()
             writer.close()
 
-        server = await asyncio.start_server(greet, "127.0.0.1", 0)
+        server = await asyncio.start_server(answer, "127.0.0.1", 0)
         port = server.sockets[0].getsockname()[1]
         proxy = await asyncio.start_server(
             tunnel.handle_client, "127.0.0.1", 0
@@ -54,13 +87,16 @@ def test_command_reaches_a_server_through_the_proxy():
         async with server, proxy:
             writer.write(f"CONNECT 127.0.0.1:{port} HTTP/1.1\r\n\r\n".encode())
             response = await reader.readuntil(b"\r\n\r\n")
-            greeting = await reader.read()
+            writer.write(greeting)
+            first = await reader.readexactly(len(greeting))
+            writer.write(b"more")
+            rest = await reader.read()
             writer.close()
-        return response, greeting
+        return response, first, rest
 
-    response, greeting = asyncio.run(scenario())
+    response, first, rest = asyncio.run(scenario())
     assert response.startswith(b"HTTP/1.1 200")
-    assert greeting == b"hello"
+    assert (first, rest) == (greeting[::-1], b"more")
 
 
 def test_tunnel_hands_on_the_proxy_and_the_exit_code():
