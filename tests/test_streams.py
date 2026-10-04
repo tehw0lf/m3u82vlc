@@ -142,3 +142,11 @@ def test_get_unique_file_name_skips_existing_and_taken(tmp_path, monkeypatch):
     assert streams.get_unique_file_name("nyancat.ts") == second
     third = str(tmp_path / "nyancat_2.ts")
     assert streams.get_unique_file_name("nyancat.ts", {second}) == third
+
+
+def test_get_unique_file_name_is_absolute(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(streams.env, "base_path", "recordings/")
+    assert streams.get_unique_file_name("nyancat.ts") == str(
+        tmp_path / "recordings" / "nyancat.ts"
+    )

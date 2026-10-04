@@ -233,8 +233,9 @@ api = APIRouter(prefix="/api", dependencies=[Depends(require_token)])
 def get_state() -> dict[str, list[dict]]:
     recordings = find_recordings()
     with lock:
-        adopt_recordings(recordings)
+        # Ended links first, so they can make room for the adopted ones
         update_ended_links(recordings)
+        adopt_recordings(recordings)
         described_links = [describe_link(link) for link in links.values()]
     return {
         "links": described_links,
