@@ -41,9 +41,10 @@ the same is available as a REST API under `/api`, with the token sent as
 | `DELETE /api/recordings/<pid>` | stop a recording |
 
 the connection is plain HTTP by default, so anyone in the network can read
-the token. to serve HTTPS instead, create a self-signed certificate for the
-address the server listens on and point `server_cert` and `server_key` in
-env.py to it:
+the token. to serve HTTPS instead, create a self-signed certificate and
+point `server_cert` and `server_key` in env.py to it. replace the address in
+`subjectAltName` with the one the page is opened with, as a browser rejects
+a certificate made for another address (`DNS:name` for a host name):
 
 ```bash
 mkdir -p ~/.config/m3u82vlc && cd ~/.config/m3u82vlc
@@ -74,7 +75,7 @@ favorites  # shortcuts available via arrow up
 elements_to_click_on_load  # ids of elements to click
 server_host  # address the remote control listens on, default 127.0.0.1
 server_port  # port of the remote control, default 8338
-server_cert  # certificate to serve HTTPS with, HTTP if not set
-server_key  # private key of the certificate
+server_cert  # certificate to serve HTTPS with, HTTP if both are not set
+server_key  # private key of the certificate, set both or none
 server_token  # access token, generated on every start if not set
 ```
