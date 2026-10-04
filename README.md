@@ -41,23 +41,42 @@ the same is available as a REST API under `/api`, with the token sent as
 | `DELETE /api/recordings/<pid>` | stop a recording |
 
 the connection is plain HTTP by default, so anyone in the network can read
-the token. to serve HTTPS instead, create a self-signed certificate and
-point `server_cert` and `server_key` in env.py to it. replace the address in
-`subjectAltName` with the one the page is opened with, as a browser rejects
-a certificate made for another address (`DNS:name` for a host name):
+the token. to serve HTTPS instead, create a certificate and point
+`server_cert` and `server_key` in env.py to it. the commands below create a
+certificate authority of your own and a server certificate signed by it.
+replace the address in `subjectAltName` with the one the page is opened
+with, as a browser rejects a certificate made for another address
+(`DNS:name` for a host name):
 
 ```bash
-mkdir -p ~/.config/m3u82vlc && cd ~/.config/m3u82vlc
+mkdir -p ~/.config/m3u82vlc && cd ~/.config/m3u82vlc && umask 077
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
-  -days 825 -keyout key.pem -out cert.pem -subj "/CN=m3u82vlc" \
-  -addext "subjectAltName=IP:192.168.1.10"
-chmod 600 key.pem
+  -days 3650 -keyout ca-key.pem -out ca.pem -subj "/CN=m3u82vlc CA" \
+  -addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
+  -addext "keyUsage=critical,keyCertSign,cRLSign"
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+  -keyout key.pem -out server.csr -subj "/CN=m3u82vlc"
+printf '%s\n' "basicConstraints=critical,CA:FALSE" \
+  "keyUsage=critical,digitalSignature" "extendedKeyUsage=serverAuth" \
+  "subjectAltName=IP:192.168.1.10" > server.ext
+openssl x509 -req -in server.csr -CA ca.pem -CAkey ca-key.pem \
+  -CAcreateserial -days 825 -extfile server.ext -out cert.pem
+rm ca-key.pem ca.srl server.csr server.ext
+chmod 644 ca.pem cert.pem
 ```
 
-a browser warns about such a certificate once, as nobody vouches for it.
-accepting the warning keeps the token from being read along, but does not
-tell the server apart from someone posing as it. for that, install
-cert.pem as a trusted certificate on the device.
+a browser warns about the certificate until it trusts ca.pem. accepting
+the warning already keeps the token from being read along, but does not
+tell the server apart from someone posing as it. for that, install ca.pem
+as a trusted authority on the device, in Firefox for example with
+`certutil -d <profile> -A -i ca.pem -n "m3u82vlc CA" -t C,,`. a single
+self-signed certificate does not work for this: Firefox rejects one that is
+an authority and the certificate of the server at once.
+
+the key of the authority is deleted right away, so nobody can use it to
+sign certificates for other sites that the device would trust. the
+certificate of the server is valid for 825 days, as some devices reject
+longer ones; create both again afterwards.
 
 ## requirements
 
