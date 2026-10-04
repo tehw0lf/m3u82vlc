@@ -23,8 +23,9 @@ uv run python server.py
 
 it prints the address of the web page including the access token. send a
 stream URL there and the page shows whether a stream was found (green) or
-not (red). a found stream can be recorded, and running recordings can be
-stopped after a confirmation. links are checked one after another.
+not (red). as there is no preview, a found stream is recorded right away,
+and running recordings can be stopped after a confirmation. links are
+checked one after another.
 
 the same is available as a REST API under `/api`, with the token sent as
 `Authorization: Bearer <token>`:
@@ -32,8 +33,7 @@ the same is available as a REST API under `/api`, with the token sent as
 | request | purpose |
 | --- | --- |
 | `GET /api/state` | links and running recordings |
-| `POST /api/links` with `{"url": "..."}` | queue a link for detection |
-| `POST /api/links/<id>/record` | record a found stream |
+| `POST /api/links` with `{"url": "..."}` | queue a link for detection and recording |
 | `DELETE /api/links/<id>` | remove a link from the list |
 | `DELETE /api/recordings/<pid>` | stop a recording |
 

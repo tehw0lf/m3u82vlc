@@ -86,36 +86,26 @@ def test_full_queue_drops_finished_links_first(client):
     assert first.id not in server.links
 
 
-def test_record_requires_found_stream(client):
-    link = client.post(
-        "/api/links", json={"url": "https://a.example/x"}, headers=AUTH
-    ).json()
-    response = client.post(f"/api/links/{link['id']}/record", headers=AUTH)
-    assert response.status_code == 409
-    assert (
-        client.post("/api/links/unknown/record", headers=AUTH).status_code
-        == 404
-    )
+def queue_link(client, url="https://a.example/nyancat"):
+    link = client.post("/api/links", json={"url": url}, headers=AUTH).json()
+    return server.links[link["id"]]
 
 
-def test_record_starts_recording(client, monkeypatch):
+def test_found_stream_is_recorded(client, monkeypatch):
     started = []
+    monkeypatch.setattr(
+        server, "find_m3u8_url", lambda url: ("m.m3u8", {"Referer": "r"})
+    )
     monkeypatch.setattr(
         server, "start_recording", lambda *arguments: started.append(arguments)
     )
     monkeypatch.setattr(server, "wait_for_output", lambda output_file: True)
-    link = client.post(
-        "/api/links", json={"url": "https://a.example/nyancat"}, headers=AUTH
-    ).json()
-    stored = server.links[link["id"]]
-    stored.state, stored.stream, stored.headers = (
-        "found",
-        "m.m3u8",
-        {"Referer": "r"},
-    )
+    link = queue_link(client)
 
-    response = client.post(f"/api/links/{link['id']}/record", headers=AUTH)
-    assert response.json()["state"] == "recording"
+    server.detect_link(server.pending.get_nowait())
+
+    assert link.state == "recording"
+    assert link.output_file == "/nonexistent-recordings/nyancat.ts"
     assert started == [
         ("m.m3u8", "/nonexistent-recordings/nyancat.ts", {"Referer": "r"})
     ]
@@ -164,13 +154,12 @@ def test_failed_recording_is_reported(client, monkeypatch):
     process = Process()
     monkeypatch.setattr(server, "start_recording", lambda *arguments: process)
     monkeypatch.setattr(server, "wait_for_output", lambda output_file: False)
-    link = client.post(
-        "/api/links", json={"url": "https://a.example/x"}, headers=AUTH
-    ).json()
-    server.links[link["id"]].state = "found"
+    link = queue_link(client)
 
-    response = client.post(f"/api/links/{link['id']}/record", headers=AUTH)
-    assert response.json()["state"] == "error"
+    server.record_link(link, "m.m3u8", {})
+
+    assert link.state == "error"
+    assert link.detail == "Recording did not start, send the link again"
     assert process.terminated
 
 
@@ -179,50 +168,38 @@ def test_failing_start_does_not_leave_link_starting(client, monkeypatch):
         raise OSError("ffmpeg is missing")
 
     monkeypatch.setattr(server, "start_recording", fail)
-    link = client.post(
-        "/api/links", json={"url": "https://a.example/x"}, headers=AUTH
-    ).json()
-    server.links[link["id"]].state = "found"
+    link = queue_link(client)
+    link.state = "starting"
 
-    failing_client = TestClient(server.app, raise_server_exceptions=False)
-    response = failing_client.post(
-        f"/api/links/{link['id']}/record", headers=AUTH
-    )
-    assert response.status_code == 500
-    assert server.links[link["id"]].state == "error"
+    server.record_link(link, "m.m3u8", {})
+
+    assert (link.state, link.detail) == ("error", "ffmpeg is missing")
     assert server.reserved_files == set()
     assert (
-        client.delete(f"/api/links/{link['id']}", headers=AUTH).status_code
-        == 204
+        client.delete(f"/api/links/{link.id}", headers=AUTH).status_code == 204
     )
 
 
-def test_overlapping_recordings_get_different_files(client, monkeypatch):
-    ids = []
-    for _ in range(2):
-        link = client.post(
-            "/api/links",
-            json={"url": "https://a.example/nyancat"},
-            headers=AUTH,
-        ).json()
-        server.links[link["id"]].state = "found"
-        ids.append(link["id"])
+def test_recordings_of_the_same_name_get_different_files(client, monkeypatch):
+    first, second = queue_link(client), queue_link(client)
     output_files = []
 
     def wait_for_output(output_file):
+        # ffmpeg has not created the file of the first recording yet
         output_files.append(output_file)
-        if len(output_files) == 1:
-            # The second request arrives before ffmpeg created the first file
-            client.post(f"/api/links/{ids[1]}/record", headers=AUTH)
+        assert output_file in server.reserved_files
         return True
 
     monkeypatch.setattr(server, "start_recording", lambda *arguments: None)
     monkeypatch.setattr(server, "wait_for_output", wait_for_output)
-    client.post(f"/api/links/{ids[0]}/record", headers=AUTH)
+    server.reserved_files.add("/nonexistent-recordings/nyancat.ts")
+    server.record_link(first, "m.m3u8", {})
+    server.reserved_files.discard("/nonexistent-recordings/nyancat.ts")
+    server.record_link(second, "m.m3u8", {})
 
     assert output_files == [
-        "/nonexistent-recordings/nyancat.ts",
         "/nonexistent-recordings/nyancat_1.ts",
+        "/nonexistent-recordings/nyancat.ts",
     ]
     assert server.reserved_files == set()
 
@@ -245,12 +222,13 @@ def test_link_can_be_removed_unless_in_use(client):
     link = client.post(
         "/api/links", json={"url": "https://a.example/x"}, headers=AUTH
     ).json()
-    server.links[link["id"]].state = "searching"
-    assert (
-        client.delete(f"/api/links/{link['id']}", headers=AUTH).status_code
-        == 409
-    )
-    server.links[link["id"]].state = "found"
+    for state in ("searching", "starting"):
+        server.links[link["id"]].state = state
+        assert (
+            client.delete(f"/api/links/{link['id']}", headers=AUTH).status_code
+            == 409
+        )
+    server.links[link["id"]].state = "not_found"
     assert (
         client.delete(f"/api/links/{link['id']}", headers=AUTH).status_code
         == 204
@@ -263,10 +241,10 @@ def test_link_can_be_removed_unless_in_use(client):
     [
         (
             (SplitStream("v.m3u8", "a.m3u8", "1920x1080"), {}),
-            "found",
+            "recording",
             "1920x1080",
         ),
-        (("master.m3u8", {"Referer": "r"}), "found", ""),
+        (("master.m3u8", {"Referer": "r"}), "recording", ""),
         ((None, {}), "not_found", ""),
         (
             RuntimeError("browser crashed\ncall log"),
@@ -279,23 +257,51 @@ def test_worker_takes_link_to_its_final_state(
     client, monkeypatch, result, state, detail
 ):
     def find_m3u8_url(url):
-        assert server.links[link["id"]].state == "searching"
+        assert link.state == "searching"
         if isinstance(result, Exception):
             raise result
         return result
 
+    def start_recording(*arguments):
+        assert link.state == "starting"
+        recorded.append(arguments[0])
+
+    recorded = []
     monkeypatch.setattr(server, "find_m3u8_url", find_m3u8_url)
-    link = client.post(
-        "/api/links", json={"url": "https://a.example/x"}, headers=AUTH
-    ).json()
+    monkeypatch.setattr(server, "start_recording", start_recording)
+    monkeypatch.setattr(server, "wait_for_output", lambda output_file: True)
+    link = queue_link(client, "https://a.example/x")
 
     server.detect_link(server.pending.get_nowait())
 
-    described = client.get("/api/state", headers=AUTH).json()["links"][0]
-    assert (described["state"], described["detail"]) == (state, detail)
-    if state == "found":
-        stored = server.links[link["id"]]
-        assert (stored.stream, stored.headers) == result
+    assert (link.state, link.detail) == (state, detail)
+    assert recorded == ([result[0]] if state == "recording" else [])
+
+
+def test_link_stays_in_list_while_recording(client, monkeypatch):
+    recording = Recording(pid=4242, output_file="/r/nyancat.ts", elapsed=5)
+    monkeypatch.setattr(server, "find_recordings", lambda: [recording])
+    link = queue_link(client)
+    link.state, link.output_file = "recording", "/r/nyancat.ts"
+    assert (
+        client.delete(f"/api/links/{link.id}", headers=AUTH).status_code == 409
+    )
+
+    # Once the recording has ended the link can go without a state request
+    monkeypatch.setattr(server, "find_recordings", list)
+    monkeypatch.setattr(server, "take_exit_code", lambda output_file: 0)
+    assert (
+        client.delete(f"/api/links/{link.id}", headers=AUTH).status_code == 204
+    )
+
+
+def test_recording_links_are_not_dropped_from_full_queue(client):
+    for number in range(server.MAX_LINKS):
+        queue_link(client, f"https://a.example/{number}").state = "recording"
+    full = client.post(
+        "/api/links", json={"url": "https://a.example/x"}, headers=AUTH
+    )
+    assert full.status_code == 429
 
 
 def test_worker_skips_removed_link(client, monkeypatch):
