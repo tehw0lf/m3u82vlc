@@ -40,7 +40,24 @@ the same is available as a REST API under `/api`, with the token sent as
 | `DELETE /api/links/<id>` | remove a link from the list |
 | `DELETE /api/recordings/<pid>` | stop a recording |
 
-the connection is plain HTTP, so only use it in a network you trust.
+the connection is plain HTTP by default, so anyone in the network can read
+the token. to serve HTTPS instead, create a self-signed certificate and
+point `server_cert` and `server_key` in env.py to it. replace the address in
+`subjectAltName` with the one the page is opened with, as a browser rejects
+a certificate made for another address (`DNS:name` for a host name):
+
+```bash
+mkdir -p ~/.config/m3u82vlc && cd ~/.config/m3u82vlc
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+  -days 825 -keyout key.pem -out cert.pem -subj "/CN=m3u82vlc" \
+  -addext "subjectAltName=IP:192.168.1.10"
+chmod 600 key.pem
+```
+
+a browser warns about such a certificate once, as nobody vouches for it.
+accepting the warning keeps the token from being read along, but does not
+tell the server apart from someone posing as it. for that, install
+cert.pem as a trusted certificate on the device.
 
 ## requirements
 
@@ -58,5 +75,7 @@ favorites  # shortcuts available via arrow up
 elements_to_click_on_load  # ids of elements to click
 server_host  # address the remote control listens on, default 127.0.0.1
 server_port  # port of the remote control, default 8338
+server_cert  # certificate to serve HTTPS with, HTTP if both are not set
+server_key  # private key of the certificate, set both or none
 server_token  # access token, generated on every start if not set
 ```

@@ -36,6 +36,26 @@ PORT = getattr(env, "server_port", 8338)
 # Without a configured token a new one is generated on every start
 TOKEN = getattr(env, "server_token", None) or secrets.token_urlsafe(16)
 
+# With a certificate and its key the page and the API are served over
+# HTTPS, so the token cannot be read on the way
+CERT_FILE = getattr(env, "server_cert", None)
+KEY_FILE = getattr(env, "server_key", None)
+
+
+def tls_options(cert_file: str | None, key_file: str | None) -> dict[str, str]:
+    """
+    Returns the options that make uvicorn serve HTTPS, or none for HTTP.
+    """
+    if not cert_file and not key_file:
+        return {}
+    if not cert_file or not key_file:
+        raise ValueError("server_cert and server_key have to be set together")
+    for file in (cert_file, key_file):
+        if not os.path.isfile(file):
+            raise ValueError(f"{file} does not exist")
+    return {"ssl_certfile": cert_file, "ssl_keyfile": key_file}
+
+
 # Links kept in the list, including the finished ones
 MAX_LINKS = 50
 
@@ -342,5 +362,7 @@ def index() -> str:
 
 
 if __name__ == "__main__":
-    print(f"Open http://{HOST}:{PORT}/?token={TOKEN}")
-    uvicorn.run(app, host=HOST, port=PORT)
+    options = tls_options(CERT_FILE, KEY_FILE)
+    scheme = "https" if options else "http"
+    print(f"Open {scheme}://{HOST}:{PORT}/?token={TOKEN}")
+    uvicorn.run(app, host=HOST, port=PORT, **options)
