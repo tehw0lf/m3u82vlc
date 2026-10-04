@@ -295,6 +295,82 @@ def test_link_stays_in_list_while_recording(client, monkeypatch):
     )
 
 
+def test_recording_without_link_is_adopted(client, monkeypatch):
+    recordings = [
+        Recording(pid=1, output_file="/r/older_1.ts", elapsed=90),
+        Recording(pid=2, output_file="/r/nyancat.ts", elapsed=5),
+    ]
+    monkeypatch.setattr(server, "find_recordings", lambda: recordings)
+    link = queue_link(client)
+    link.state, link.output_file = "recording", "/r/nyancat.ts"
+
+    for _ in range(2):
+        described = client.get("/api/state", headers=AUTH).json()["links"]
+        assert [(entry["name"], entry["state"]) for entry in described] == [
+            ("nyancat", "recording"),
+            ("older_1", "recording"),
+        ]
+    adopted = described[1]
+    assert adopted["url"] == ""
+    assert (
+        client.delete(f"/api/links/{adopted['id']}", headers=AUTH).status_code
+        == 409
+    )
+
+    # Its exit code is unknown, as another program started it
+    monkeypatch.setattr(server, "find_recordings", lambda: recordings[1:])
+    described = client.get("/api/state", headers=AUTH).json()["links"]
+    assert (described[1]["state"], described[1]["detail"]) == ("finished", "")
+    assert (
+        client.delete(f"/api/links/{adopted['id']}", headers=AUTH).status_code
+        == 204
+    )
+
+
+def test_starting_recording_is_not_adopted(client, monkeypatch):
+    link = queue_link(client)
+
+    def wait_for_output(output_file):
+        # ffmpeg is already in the process list while the link is starting
+        recording = Recording(pid=1, output_file=output_file, elapsed=1)
+        monkeypatch.setattr(server, "find_recordings", lambda: [recording])
+        assert len(client.get("/api/state", headers=AUTH).json()["links"]) == 1
+        return False
+
+    class Process:
+        def terminate(self):
+            pass
+
+    monkeypatch.setattr(
+        server, "start_recording", lambda *arguments: Process()
+    )
+    monkeypatch.setattr(server, "wait_for_output", wait_for_output)
+    server.record_link(link, "m.m3u8", {})
+
+    # It may still be listed for a moment after it was terminated
+    described = client.get("/api/state", headers=AUTH).json()["links"]
+    assert [entry["state"] for entry in described] == ["error"]
+
+
+def test_full_list_adopts_no_recording(client, monkeypatch):
+    for number in range(server.MAX_LINKS):
+        queue_link(client, f"https://a.example/{number}")
+    recording = Recording(pid=1, output_file="/r/nyancat.ts", elapsed=5)
+    monkeypatch.setattr(server, "find_recordings", lambda: [recording])
+
+    state = client.get("/api/state", headers=AUTH).json()
+    assert len(state["links"]) == server.MAX_LINKS
+    assert all(entry["state"] == "waiting" for entry in state["links"])
+
+    next(iter(server.links.values())).state = "not_found"
+    described = client.get("/api/state", headers=AUTH).json()["links"]
+    assert len(described) == server.MAX_LINKS
+    assert (described[-1]["name"], described[-1]["state"]) == (
+        "nyancat",
+        "recording",
+    )
+
+
 def test_recording_links_are_not_dropped_from_full_queue(client):
     for number in range(server.MAX_LINKS):
         queue_link(client, f"https://a.example/{number}").state = "recording"

@@ -25,7 +25,9 @@ it prints the address of the web page including the access token. send a
 stream URL there and the page shows whether a stream was found (green) or
 not (red). as there is no preview, a found stream is recorded right away,
 and running recordings can be stopped after a confirmation. links are
-checked one after another.
+checked one after another. a recording started elsewhere, for example in
+the terminal, gets an entry in the link list as well, so the page shows
+when it has ended.
 
 the same is available as a REST API under `/api`, with the token sent as
 `Authorization: Bearer <token>`:
