@@ -13,6 +13,7 @@ import asyncio
 import os
 import signal
 import sys
+from urllib.parse import urlsplit
 
 # Seconds after which another attempt joins the ones still under way
 ATTEMPT_INTERVAL = 0.3
@@ -108,28 +109,58 @@ async def forward(
         writer.close()
 
 
+def plain_request(request: bytes, path: str) -> bytes:
+    """
+    Turns a request for a proxy into one for the server itself. The server
+    is asked to close the connection after its answer, as the next request
+    of the command may be meant for another server.
+    """
+    head, _, body = request.partition(b"\r\n\r\n")
+    request_line, *headers = head.split(b"\r\n")
+    method, _, version = request_line.split(b" ")
+    lines = [
+        b" ".join([method, path.encode(), version]),
+        *(
+            header
+            for header in headers
+            if not header.lower().startswith(b"connection:")
+        ),
+        b"Connection: close",
+    ]
+    return b"\r\n".join([*lines, b"", b""]) + body
+
+
 async def handle_client(
     reader: asyncio.StreamReader, writer: asyncio.StreamWriter
 ) -> None:
     """
-    Serves one CONNECT request, which is what ffmpeg sends for https, and
-    passes the data on in both directions afterwards. The server is only
-    connected once the greeting for it is known, as the greeting is sent
-    with every attempt.
+    Serves one request of the command and passes the data on in both
+    directions afterwards. For https that is a CONNECT request followed by
+    a greeting, for http the request itself. Either one is sent with every
+    attempt to reach the server.
     """
     server = None
     try:
         request = await reader.readuntil(b"\r\n\r\n")
         method, target, _ = request.split(b"\r\n")[0].decode().split(" ")
-        host, _, port = target.rpartition(":")
-        if method != "CONNECT":
-            raise ValueError("Not a CONNECT request")
-        writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
-        await writer.drain()
-        greeting = await asyncio.wait_for(
-            read_greeting(reader), GREETING_TIMEOUT
-        )
-        server = await open_connection(host.strip("[]"), int(port), greeting)
+        if method == "CONNECT":
+            host, _, port = target.rpartition(":")
+            host, port = host.strip("[]"), int(port)
+            writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
+            await writer.drain()
+            greeting = await asyncio.wait_for(
+                read_greeting(reader), GREETING_TIMEOUT
+            )
+        else:
+            parts = urlsplit(target)
+            if parts.scheme != "http" or not parts.hostname:
+                raise ValueError("Not a request for a proxy")
+            host, port = parts.hostname, parts.port or 80
+            path = parts.path or "/"
+            if parts.query:
+                path += "?" + parts.query
+            greeting = plain_request(request, path)
+        server = await open_connection(host, port, greeting)
         if server is not None:
             writer.write(server[2])
             await writer.drain()

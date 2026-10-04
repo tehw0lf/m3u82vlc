@@ -1,6 +1,7 @@
 import os
 import queue
 import secrets
+import signal
 import subprocess
 import threading
 from contextlib import asynccontextmanager
@@ -139,7 +140,9 @@ def end_process(process: subprocess.Popen) -> None:
     try:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
-        pass
+        # A recorder runs in a process group of its own, along with ffmpeg
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
 
 
 def first_line(error: Exception) -> str:

@@ -159,6 +159,22 @@ class Process:
         assert self.terminated
 
 
+def test_recorder_that_does_not_end_is_killed(monkeypatch):
+    class StuckProcess(Process):
+        pid = 4242
+
+        def wait(self, timeout=None):
+            if timeout is not None:
+                raise server.subprocess.TimeoutExpired("ffmpeg", timeout)
+
+    killed = []
+    monkeypatch.setattr(server.os, "killpg", lambda *call: killed.append(call))
+
+    server.end_process(StuckProcess())
+
+    assert killed == [(4242, server.signal.SIGKILL)]
+
+
 def test_failed_recording_is_reported(client, monkeypatch):
     processes = []
 

@@ -99,6 +99,41 @@ def test_command_reaches_a_server_through_the_proxy():
     assert (first, rest) == (greeting[::-1], b"more")
 
 
+def test_plain_request_is_passed_on_to_its_server():
+    async def scenario():
+        requests = []
+
+        async def answer(reader, writer):
+            requests.append(await reader.readuntil(b"\r\n\r\n"))
+            writer.write(b"HTTP/1.1 200 OK\r\n\r\nplaylist")
+            await writer.drain()
+            writer.close()
+
+        server = await asyncio.start_server(answer, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        proxy = await asyncio.start_server(
+            tunnel.handle_client, "127.0.0.1", 0
+        )
+        reader, writer = await asyncio.open_connection(
+            "127.0.0.1", proxy.sockets[0].getsockname()[1]
+        )
+        async with server, proxy:
+            writer.write(
+                f"GET http://127.0.0.1:{port}/m.m3u8?a=1 HTTP/1.1\r\n"
+                "Connection: keep-alive\r\nUser-Agent: UA\r\n\r\n".encode()
+            )
+            response = await reader.read()
+            writer.close()
+        return requests, response
+
+    requests, response = asyncio.run(scenario())
+    assert response.endswith(b"playlist")
+    assert requests[0].startswith(b"GET /m.m3u8?a=1 HTTP/1.1\r\n")
+    assert b"User-Agent: UA\r\n" in requests[0]
+    assert b"keep-alive" not in requests[0]
+    assert requests[0].endswith(b"Connection: close\r\n\r\n")
+
+
 def test_tunnel_hands_on_the_proxy_and_the_exit_code():
     script = (
         "import os, sys;"
