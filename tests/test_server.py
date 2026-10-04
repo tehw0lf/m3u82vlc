@@ -298,6 +298,8 @@ def test_link_stays_in_list_while_recording(client, monkeypatch):
 def test_recording_without_link_is_adopted(client, monkeypatch):
     recordings = [
         Recording(pid=1, output_file="/r/older_1.ts", elapsed=90),
+        # Two processes writing the same file still are one entry
+        Recording(pid=3, output_file="/r/older_1.ts", elapsed=80),
         Recording(pid=2, output_file="/r/nyancat.ts", elapsed=5),
     ]
     monkeypatch.setattr(server, "find_recordings", lambda: recordings)
@@ -318,7 +320,7 @@ def test_recording_without_link_is_adopted(client, monkeypatch):
     )
 
     # Its exit code is unknown, as another program started it
-    monkeypatch.setattr(server, "find_recordings", lambda: recordings[1:])
+    monkeypatch.setattr(server, "find_recordings", lambda: recordings[2:])
     described = client.get("/api/state", headers=AUTH).json()["links"]
     assert (described[1]["state"], described[1]["detail"]) == ("finished", "")
     assert (

@@ -186,6 +186,7 @@ def adopt_recordings(recordings: list[Recording]) -> None:
             output_file=recording.output_file,
         )
         links[link.id] = link
+        known.add(recording.output_file)
 
 
 def link_name(link: Link) -> str:
