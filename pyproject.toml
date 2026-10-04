@@ -12,7 +12,7 @@ dependencies = [
 
 [tool.setuptools]
 # Listed explicitly, as the local env.py would otherwise be discovered too
-py-modules = ["main", "page", "server", "streams"]
+py-modules = ["main", "page", "server", "streams", "tunnel"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

@@ -4,6 +4,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Collection
@@ -250,17 +251,29 @@ def find_llhls_master(
     return find_split_stream(master_url, headers)
 
 
-def wait_for_output(output_file: str, timeout: float = 15) -> bool:
+def wait_for_output(
+    output_file: str,
+    timeout: float = 30,
+    process: subprocess.Popen | None = None,
+) -> bool:
     """
     Waits until the recorder has written data, so playback does not open
-    an empty or missing file. Returns whether data showed up in time.
+    an empty or missing file. Returns whether data showed up in time. With
+    the process given, the wait ends as soon as the recorder has exited.
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if os.path.exists(output_file) and os.path.getsize(output_file):
             return True
+        if process is not None and process.poll() is not None:
+            return False
         time.sleep(0.25)
     return False
+
+
+# Runs ffmpeg behind a proxy that gets through to stream servers which
+# drop a part of the connections
+TUNNEL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tunnel.py")
 
 
 def ffmpeg_input(url: str, headers: dict[str, str]) -> list[str]:
@@ -528,7 +541,7 @@ def start_recording(
         output_file,
     ]
     process = subprocess.Popen(
-        ["nohup", *record_command],
+        ["nohup", sys.executable, TUNNEL, *record_command],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,

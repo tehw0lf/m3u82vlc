@@ -97,12 +97,24 @@ def test_start_recording_command(monkeypatch):
     streams.start_recording("master.m3u8", "/out.ts", {})
 
     split, single = commands
-    assert split[:2] == ["nohup", "ffmpeg"]
+    assert split[0] == "nohup" and split[2:4] == [streams.TUNNEL, "ffmpeg"]
     assert "-copyts" in split
     assert split.count("-i") == 2 and split.count("-user_agent") == 2
     assert "Referer: https://site.example/\r\n" in split
     assert split[-3:] == ["-f", "mpegts", "/out.ts"]
     assert single.count("-i") == 1 and "-copyts" not in single
+
+
+def test_wait_for_output_ends_with_the_recorder(tmp_path):
+    class Process:
+        def poll(self):
+            return 146
+
+    started = time.monotonic()
+    assert not streams.wait_for_output(
+        str(tmp_path / "out.ts"), timeout=30, process=Process()
+    )
+    assert time.monotonic() - started < 5
 
 
 def test_find_recordings_reaps_ended_recording(monkeypatch):
