@@ -184,7 +184,8 @@ function render(state) {
         act("DELETE", "/recordings/" + recording.pid);
       }
     });
-    return row("green", recording.name,
+    // Amber until the size shown is no longer zero
+    return row(recording.size < 5e4 ? "amber" : "green", recording.name,
       duration(recording.elapsed) + " \\u00b7 " + size, [stop]);
   });
   $("recordings").replaceChildren(...(recordings.length
