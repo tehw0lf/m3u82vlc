@@ -27,6 +27,7 @@ INDEX_HTML = """<!doctype html>
   }
   button.quiet { background: #2e2e38; }
   button.danger { background: #a83232; }
+  button:disabled { opacity: .4; cursor: default; }
   ul { list-style: none; margin: 0; padding: 0; }
   li {
     display: flex; align-items: center; gap: 12px; padding: 12px;
@@ -76,7 +77,6 @@ INDEX_HTML = """<!doctype html>
 const STATES = {
   waiting: ["", "Waiting"],
   searching: ["amber", "Searching"],
-  found: ["green", "Stream found"],
   not_found: ["red", "No stream found"],
   error: ["red", "Error"],
   starting: ["amber", "Starting recording"],
@@ -161,17 +161,13 @@ function button(label, className, onClick) {
 function render(state) {
   const links = state.links.slice().reverse().map((link) => {
     const [light, label] = STATES[link.state] || ["", link.state];
-    const buttons = [];
-    if (link.state === "found") {
-      buttons.push(button("Record", "", () =>
-        act("POST", "/links/" + link.id + "/record")));
-    }
-    if (!["searching", "starting"].includes(link.state)) {
-      buttons.push(button("\\u00d7", "quiet", () =>
-        act("DELETE", "/links/" + link.id)));
-    }
+    const remove = button("\\u00d7", "quiet", () =>
+      act("DELETE", "/links/" + link.id));
+    // A link in use stays in the list until it is done
+    remove.disabled = ["searching", "starting", "recording"]
+      .includes(link.state);
     const note = link.detail ? label + " \\u00b7 " + link.detail : label;
-    return row(light, link.name, note, buttons);
+    return row(light, link.name, note, [remove]);
   });
   $("links").replaceChildren(
     ...(links.length ? links : [element("li", "empty", "No links yet")]));

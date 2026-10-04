@@ -3,7 +3,7 @@ import queue
 import secrets
 import threading
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Annotated
 from urllib.parse import urlparse
 
@@ -16,6 +16,7 @@ import env
 from page import INDEX_HTML
 from streams import (
     FFMPEG_STOPPED,
+    Recording,
     SplitStream,
     find_m3u8_url,
     find_recordings,
@@ -36,8 +37,11 @@ TOKEN = getattr(env, "server_token", None) or secrets.token_urlsafe(16)
 # Links kept in the list, including the finished ones
 MAX_LINKS = 50
 
+# States in which a link cannot be removed from the list
+BUSY_STATES = ("searching", "starting", "recording")
+
 # States in which a link is still being worked on
-ACTIVE_STATES = ("waiting", "searching", "starting")
+ACTIVE_STATES = ("waiting", *BUSY_STATES)
 
 
 @dataclass
@@ -46,8 +50,6 @@ class Link:
     url: str
     state: str = "waiting"
     detail: str = ""
-    stream: str | SplitStream | None = None
-    headers: dict[str, str] = field(default_factory=dict)
     output_file: str | None = None
 
 
@@ -56,7 +58,8 @@ lock = threading.Lock()
 # ffmpeg creates its output file only once data arrives, so the names
 # handed out in the meantime are kept here to not use them twice
 reserved_files: set[str] = set()
-# Each detection launches its own browser, so they run one after another
+# Each detection launches its own browser, so the links are detected and
+# recorded one after another
 pending: queue.Queue[Link] = queue.Queue()
 
 
@@ -70,21 +73,55 @@ def detect_link(link: Link) -> None:
         if link.id not in links:
             return
         link.state = "searching"
+    stream, headers = None, {}
     try:
         stream, headers = find_m3u8_url(link.url)
     # Any failure must only fail this link and not end the worker
     except Exception as e:  # noqa: BLE001
-        state, detail = "error", str(e).partition("\n")[0][:200]
+        state, detail = "error", first_line(e)
     else:
         if isinstance(stream, SplitStream):
-            state, detail = "found", stream.resolution or ""
+            state, detail = "starting", stream.resolution or ""
         elif stream:
-            state, detail = "found", ""
+            state, detail = "starting", ""
         else:
             state, detail = "not_found", ""
-        link.stream, link.headers = stream, headers
     with lock:
         link.state, link.detail = state, detail
+    if stream:
+        # There is no preview to confirm here, so a found stream is recorded
+        record_link(link, stream, headers)
+
+
+def record_link(
+    link: Link, stream: str | SplitStream, headers: dict[str, str]
+) -> None:
+    with lock:
+        output_file = get_unique_file_name(
+            f"{process_input(link.url)}.ts", reserved_files
+        )
+        reserved_files.add(output_file)
+    process = None
+    started = False
+    detail = "Recording did not start, send the link again"
+    try:
+        process = start_recording(stream, output_file, headers)
+        started = wait_for_output(output_file)
+    # Any failure must only fail this link and not end the worker
+    except Exception as e:  # noqa: BLE001
+        detail = first_line(e)
+    if process is not None and not started:
+        process.terminate()
+    with lock:
+        reserved_files.discard(output_file)
+        if started:
+            link.state, link.output_file = "recording", output_file
+        else:
+            link.state, link.detail = "error", detail
+
+
+def first_line(error: Exception) -> str:
+    return str(error).partition("\n")[0][:200]
 
 
 def describe_exit(exit_code: int | None) -> tuple[str, str]:
@@ -100,6 +137,19 @@ def describe_exit(exit_code: int | None) -> tuple[str, str]:
     if exit_code == FFMPEG_STOPPED:
         return "finished", "Stopped"
     return "error", f"Recording failed, ffmpeg exit code {exit_code}"
+
+
+def update_ended_links(recordings: list[Recording]) -> None:
+    """
+    Marks the links whose recording is no longer running. The lock must be
+    held.
+    """
+    output_files = {recording.output_file for recording in recordings}
+    for link in links.values():
+        if link.state == "recording" and link.output_file not in output_files:
+            link.state, link.detail = describe_exit(
+                take_exit_code(link.output_file)
+            )
 
 
 def require_token(
@@ -139,15 +189,8 @@ api = APIRouter(prefix="/api", dependencies=[Depends(require_token)])
 @api.get("/state")
 def get_state() -> dict[str, list[dict]]:
     recordings = find_recordings()
-    output_files = {recording.output_file for recording in recordings}
     with lock:
-        for link in links.values():
-            if link.state == "recording" and (
-                link.output_file not in output_files
-            ):
-                link.state, link.detail = describe_exit(
-                    take_exit_code(link.output_file)
-                )
+        update_ended_links(recordings)
         described_links = [describe_link(link) for link in links.values()]
     return {
         "links": described_links,
@@ -187,42 +230,13 @@ def add_link(request: LinkRequest) -> dict[str, str]:
 
 @api.delete("/links/{link_id}", status_code=204)
 def remove_link(link_id: str) -> None:
+    recordings = find_recordings()
     with lock:
         link = find_link(link_id)
-        if link.state in ("searching", "starting"):
+        update_ended_links(recordings)
+        if link.state in BUSY_STATES:
             raise HTTPException(status_code=409, detail="Link is in use")
         del links[link_id]
-
-
-@api.post("/links/{link_id}/record")
-def record_link(link_id: str) -> dict[str, str]:
-    with lock:
-        link = find_link(link_id)
-        if link.state != "found":
-            raise HTTPException(status_code=409, detail="No stream to record")
-        link.state = "starting"
-        output_file = get_unique_file_name(
-            f"{process_input(link.url)}.ts", reserved_files
-        )
-        reserved_files.add(output_file)
-    process = None
-    started = False
-    try:
-        process = start_recording(link.stream, output_file, link.headers)
-        started = wait_for_output(output_file)
-    finally:
-        if process is not None and not started:
-            # The playlist session has probably expired in the meantime
-            process.terminate()
-        with lock:
-            reserved_files.discard(output_file)
-            if started:
-                link.state, link.detail = "recording", ""
-                link.output_file = output_file
-            else:
-                link.state = "error"
-                link.detail = "Recording did not start, send the link again"
-    return describe_link(link)
 
 
 @api.delete("/recordings/{pid}", status_code=204)
