@@ -36,6 +36,7 @@ the same is available as a REST API under `/api`, with the token sent as
 | --- | --- |
 | `GET /api/state` | links and running recordings |
 | `POST /api/links` with `{"url": "..."}` | queue a link for detection and recording |
+| `POST /api/links/<id>/retry` | detect and record a failed link again |
 | `DELETE /api/links/<id>` | remove a link from the list |
 | `DELETE /api/recordings/<pid>` | stop a recording |
 

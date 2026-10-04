@@ -1,6 +1,7 @@
 import os
 import queue
 import secrets
+import subprocess
 import threading
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -36,6 +37,10 @@ TOKEN = getattr(env, "server_token", None) or secrets.token_urlsafe(16)
 
 # Links kept in the list, including the finished ones
 MAX_LINKS = 50
+
+# Times a recording is started before its link is reported as failed, as
+# stream servers drop a part of the connections at times
+START_ATTEMPTS = 3
 
 # States in which a link cannot be removed from the list
 BUSY_STATES = ("searching", "starting", "recording")
@@ -101,17 +106,19 @@ def record_link(
             f"{process_input(link.url)}.ts", reserved_files
         )
         reserved_files.add(output_file)
-    process = None
     started = False
-    detail = "Recording did not start, send the link again"
-    try:
-        process = start_recording(stream, output_file, headers)
-        started = wait_for_output(output_file)
-    # Any failure must only fail this link and not end the worker
-    except Exception as e:  # noqa: BLE001
-        detail = first_line(e)
-    if process is not None and not started:
-        process.terminate()
+    detail = "Recording did not start"
+    for _ in range(START_ATTEMPTS):
+        process = None
+        try:
+            process = start_recording(stream, output_file, headers)
+            started = wait_for_output(output_file, process=process)
+        # Any failure must only fail this link and not end the worker
+        except Exception as e:  # noqa: BLE001
+            detail = first_line(e)
+        if started or process is None:
+            break
+        end_process(process)
     with lock:
         reserved_files.discard(output_file)
         # Kept for a failed start as well, so an ffmpeg that is still
@@ -121,6 +128,18 @@ def record_link(
             link.state = "recording"
         else:
             link.state, link.detail = "error", detail
+
+
+def end_process(process: subprocess.Popen) -> None:
+    """
+    Ends a recorder that wrote no data and waits for it, so it is gone
+    before the next one is started with the same output file.
+    """
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def first_line(error: Exception) -> str:
@@ -263,6 +282,20 @@ def add_link(request: LinkRequest) -> dict[str, str]:
         if not make_room():
             raise HTTPException(status_code=429, detail="Queue is full")
         links[link.id] = link
+    pending.put(link)
+    return describe_link(link)
+
+
+@api.post("/links/{link_id}/retry")
+def retry_link(link_id: str) -> dict[str, str]:
+    recordings = find_recordings()
+    with lock:
+        link = find_link(link_id)
+        update_ended_links(recordings)
+        # A recording without a link has no page to detect the stream on
+        if link.state in ACTIVE_STATES or not link.url:
+            raise HTTPException(status_code=409, detail="Link is in use")
+        link.state, link.detail, link.output_file = "waiting", "", None
     pending.put(link)
     return describe_link(link)
 

@@ -167,7 +167,12 @@ function render(state) {
     remove.disabled = ["searching", "starting", "recording"]
       .includes(link.state);
     const note = link.detail ? label + " \\u00b7 " + link.detail : label;
-    return row(light, link.name, note, [remove]);
+    const buttons = [remove];
+    if (["error", "not_found"].includes(link.state) && link.url) {
+      buttons.unshift(button("Retry", "", () =>
+        act("POST", "/links/" + link.id + "/retry")));
+    }
+    return row(light, link.name, note, buttons);
   });
   $("links").replaceChildren(
     ...(links.length ? links : [element("li", "empty", "No links yet")]));
